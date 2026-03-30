@@ -278,7 +278,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
   return (
     <div>
       {toast && <Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
-      <SectionHeader title="Returns" subtitle="Return Customer List → PV → RTO / RPV"/>
+      <SectionHeader title="Returns"/>
       <div className="ims-tab-bar">
         {TABS.map(t=>(
           <button key={t} className={`ims-tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>

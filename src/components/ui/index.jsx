@@ -69,7 +69,7 @@ export function SectionHeader({ title, subtitle, children }) {
   return (
     <div style={{ display:"flex", alignItems:"flex-start", justifyContent:"space-between", marginBottom:24 }}>
       <div>
-        <h2 className="gradient-text" style={{ fontSize:26, fontWeight:800, margin:0, fontFamily:"'Syne',sans-serif" }}>{title}</h2>
+        <h2 className="gradient-text" style={{ fontSize:28, fontWeight:600, margin:0, fontFamily:"'Syne',sans-serif" }}>{title}</h2>
         {subtitle && <p className="t-secondary" style={{ fontSize:13, marginTop:4 }}>{subtitle}</p>}
       </div>
       {children && <div style={{ display:"flex", gap:8 }}>{children}</div>}

@@ -22,7 +22,7 @@ export default function Sidebar({ active, setActive }) {
       <div className="ims-sidebar-logo">
         {!collapsed && (
           <div>
-            <div className="gradient-text" style={{ fontSize:13, fontWeight:800, letterSpacing:"0.12em", fontFamily:"'Syne',sans-serif" }}>MIDC IMS</div>
+            <div className="gradient-text" style={{ fontSize:16, fontWeight:600, letterSpacing:"0.12em", fontFamily:"'Syne',sans-serif" }}>MIDC IMS</div>
             <div className="t-muted" style={{ fontSize:11, marginTop:2 }}>Eduspark</div>
           </div>
         )}

@@ -68,7 +68,7 @@ export default function App() {
         <div className="ims-topbar">
           <span className="t-muted" style={{fontSize:12}}>MIDC IMS</span>
           <span className="t-muted" style={{fontSize:12}}>›</span>
-          <span className="t-primary" style={{fontSize:13,fontWeight:600,fontFamily:"'Syne',sans-serif"}}>{PAGE_TITLES[active]}</span>
+          <span className="t-primary" style={{fontSize:13,fontWeight:200,fontFamily:"'Syne',sans-serif"}}>{PAGE_TITLES[active]}</span>
           <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:10}}>
             <div className="ims-topbar-badge"><div className="ims-dot-green"/>Firebase</div>
             <button className="ims-topbar-btn-accent" onClick={()=>setActive("reports")}>⬇ Reports</button>

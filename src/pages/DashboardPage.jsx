@@ -56,7 +56,7 @@ export default function DashboardPage() {
   return (
     <div style={{display:"flex",flexDirection:"column",gap:24}}>
       <div>
-        <h1 className="gradient-text" style={{fontSize:28,fontWeight:800,margin:0,fontFamily:"'Syne',sans-serif"}}>Dashboard</h1>
+        <h1 className="gradient-text" style={{fontSize:30,fontWeight:600,margin:0,fontFamily:"'Syne',sans-serif"}}>Dashboard</h1>
         <p className="t-secondary" style={{fontSize:13,marginTop:6}}>Inventory Management System — MIDC Eduspark</p>
       </div>
 
@@ -64,7 +64,7 @@ export default function DashboardPage() {
         {kpis.map((k,i)=>(
           <div key={k.label} className="ims-kpi-card fade-up" style={{animationDelay:`${i*50}ms`}}>
             <div style={{width:34,height:34,borderRadius:10,background:k.iconBg,color:k.iconColor,fontSize:15,display:"flex",alignItems:"center",justifyContent:"center",marginBottom:10}}>{k.icon}</div>
-            <div className="t-primary" style={{fontSize:20,fontWeight:800,fontFamily:"'Syne',sans-serif"}}>{k.value}</div>
+            <div className="t-primary" style={{fontSize:20,fontWeight:600,fontFamily:"'Syne',sans-serif"}}>{k.value}</div>
             <div className="t-secondary" style={{fontSize:11,fontWeight:500,marginTop:4}}>{k.label}</div>
           </div>
         ))}
