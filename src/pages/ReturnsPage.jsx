@@ -6,6 +6,19 @@ const REMARKS   = ["Damage","Quality Issue","Minor Scratch","Loss","Fraud"];
 const CONDITION = ["Very Good","Good","QC Failed"];
 const TABS      = ["Return Customer List","PV","RTO","RPV","Return Table"];
 
+// Return Inventory location prefix map
+const LOC_PREFIX = {
+  FD:  { code:"FD",  label:"Fraud",               status:"Fraud",            badgeColor:"red"    },
+  DM:  { code:"DM",  label:"Damaged",             status:"Damaged",          badgeColor:"red"    },
+  QI:  { code:"QI",  label:"Quality Issue",       status:"QC Failed",        badgeColor:"amber"  },
+  RB:  { code:"RB",  label:"Refurbishment Bulk",  status:"Refurbishing",     badgeColor:"violet" },
+  DIS: { code:"DIS", label:"Disposal",            status:"Pending Disposal", badgeColor:"cyan"   },
+};
+const parseLocPrefix = (loc = "") => {
+  const prefix = (loc.split("-")[0] || "").toUpperCase();
+  return LOC_PREFIX[prefix] || null;
+};
+
 export default function ReturnsPage({ shippedOrder, clearShipped }) {
   const [tab, setTab]             = useState("Return Customer List");
   const [shipped, setShipped]     = useState([]);   // all shipped customers
@@ -165,20 +178,37 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
   const handlePutAway = async (item) => {
     const loc = scanLocs[item.id]||"";
     if (!loc) return setToast({ msg:"Scan a location first", type:"error" });
+    if (!item.qc) return setToast({ msg:"Set QC result before putting away", type:"error" });
+
+    const locMeta = parseLocPrefix(loc); // null if not a return-category location
+
+    // Always save to returnstable
     await addItem("returnstable", {
       returnId: item.returnId, orderId: item.orderId, customerName: item.customerName,
       skuId: item.skuId, skuName: item.skuName, qty: item.qty,
       qc: item.qc, remarks: item.remarks||"—",
-      condition: item.qc==="Pass"?"Good":"QC Failed",
+      condition: item.qc==="Pass" ? "Good" : "QC Failed",
       location: loc, type: "RPV", itemType: item.itemType||"Fresh",
+      returnCategory: locMeta?.code||null,
       completedAt: new Date().toISOString(),
     });
+
     if (item.qc === "Pass") {
+      // Sellable — goes to regular inventory
       await addToInventory(item.skuId, item.skuName, Number(item.qty||1), loc, item.itemType||"Fresh", item.returnId);
+      setToast({ msg:`Put away ✓ — ${item.returnId} · Regular inventory updated`, type:"success" });
+    } else {
+      // QC Failed — must use a return-category location prefix
+      if (!locMeta) return setToast({
+        msg:`QC Failed needs a return location (FD-/DM-/QI-/RB-/DIS-…). Got: "${loc}"`,
+        type:"error",
+      });
+      await addToReturnInventory(item, loc, locMeta);
+      setToast({ msg:`Put away ✓ — [${locMeta.code}] ${locMeta.label} · Return Inventory updated`, type:"success" });
     }
-    await updateItem("rpvprocess", item.id, { status:"Done", scanLocation:loc });
+
+    await updateItem("rpvprocess", item.id, { status:"Done", scanLocation:loc, returnCategory:locMeta?.code||null });
     setScanLocs(p => { const n={...p}; delete n[item.id]; return n; });
-    setToast({ msg:`Put away — ${item.returnId}${item.qc==="Pass"?" · Inventory updated":""}`, type:"success" });
     refresh();
   };
 
@@ -214,10 +244,41 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
     });
   };
 
+  // ── Helper: upsert returninventory + log transaction ──
+  const addToReturnInventory = async (item, location, locMeta) => {
+    const qty  = Number(item.qty||1);
+    const existing = await searchByField("returninventory","skuId",item.skuId);
+    if (existing.length > 0) {
+      const inv = existing[0];
+      const newAvail = Number(inv.availableQty||0) + qty;
+      await updateItem("returninventory", inv.id, {
+        availableQty:   newAvail,
+        stockValue:     newAvail * Number(inv.cost||0),
+        location, type: locMeta.code, category: locMeta.label,
+        status: locMeta.status, updatedAt: new Date().toISOString(),
+      });
+    } else {
+      await addItem("returninventory", {
+        skuId: item.skuId, productName: item.skuName,
+        type: locMeta.code, category: locMeta.label, status: locMeta.status,
+        location, purchasedQty: qty, soldQty: 0, availableQty: qty,
+        cost: 0, stockValue: 0,
+        returnId: item.returnId, orderId: item.orderId,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      });
+    }
+    await addItem("transactions", {
+      txnId: genTxnId(), type: "IN", subType: locMeta.code,
+      skuId: item.skuId, skuName: item.skuName,
+      qty, location, ref: item.returnId,
+      createdAt: new Date().toISOString(),
+    });
+  };
+
   return (
     <div>
       {toast && <Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
-      <SectionHeader title="Returns"/>
+      <SectionHeader title="Returns" subtitle="Return Customer List → PV → RTO / RPV"/>
       <div className="ims-tab-bar">
         {TABS.map(t=>(
           <button key={t} className={`ims-tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>
@@ -437,25 +498,45 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
                   </div>
                 </div>
 
-                {/* Scan Location + Type + Put Away */}
-                <div style={{display:"flex",gap:12,alignItems:"flex-end",paddingTop:14,borderTop:"1px solid var(--border)"}}>
-                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    <label className="ims-label">Scan Location</label>
-                    <input className="ims-input" style={{width:180}} placeholder="e.g. A-02-R1"
-                      value={scanLocs[r.id]||""} onChange={e=>setScanLocs(p=>({...p,[r.id]:e.target.value}))}/>
+                {/* Scan Location + Auto Category + Put Away */}
+                <div style={{paddingTop:14,borderTop:"1px solid var(--border)"}}>
+                  <div style={{display:"flex",gap:12,alignItems:"flex-end",flexWrap:"wrap"}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                      <label className="ims-label">
+                        Scan Location
+                        {r.qc==="Fail" && <span className="t-warning"> — use return prefix (FD-/DM-/QI-/RB-/DIS-)</span>}
+                      </label>
+                      <input className="ims-input" style={{width:210}}
+                        placeholder={r.qc==="Fail" ? "e.g. QI-L03-02" : "e.g. A-02-R1"}
+                        value={scanLocs[r.id]||""}
+                        onChange={e=>setScanLocs(p=>({...p,[r.id]:e.target.value}))}/>
+                    </div>
+                    {(()=>{
+                      const meta = parseLocPrefix(scanLocs[r.id]||"");
+                      if (!meta) return null;
+                      return (
+                        <div style={{display:"flex",flexDirection:"column",gap:4,marginBottom:2}}>
+                          <label className="ims-label">Auto-detected Category</label>
+                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                            <span className={`ims-badge ims-badge-${meta.badgeColor}`} style={{fontSize:12,padding:"4px 12px"}}>{meta.code}</span>
+                            <span className="t-secondary" style={{fontSize:12,fontWeight:600}}>{meta.label}</span>
+                            <span className="t-muted" style={{fontSize:11}}>· {meta.status}</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+                    <Button variant="success" onClick={()=>handlePutAway(r)}>Put Away ✓</Button>
                   </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    <label className="ims-label">Type</label>
-                    <select className="ims-input" style={{width:120}} value={r.itemType||"Fresh"}
-                      onChange={e=>updateRPV(r.id,"itemType",e.target.value)}>
-                      <option>Fresh</option>
-                      <option>Return</option>
-                    </select>
+                  <div style={{marginTop:10}}>
+                    {r.qc==="Pass"
+                      ? <p className="t-success" style={{fontSize:11,margin:0}}>✓ QC Pass — will go to regular inventory</p>
+                      : r.qc==="Fail"
+                        ? <p className="t-warning" style={{fontSize:11,margin:0}}>
+                            ⚠ QC Fail → Return Inventory · Prefix sets category: <strong>FD</strong> Fraud · <strong>DM</strong> Damaged · <strong>QI</strong> Quality Issue · <strong>RB</strong> Refurb Bulk · <strong>DIS</strong> Disposal
+                          </p>
+                        : <p className="t-muted" style={{fontSize:11,margin:0}}>Set QC result before putting away</p>
+                    }
                   </div>
-                  <Button variant="success" onClick={()=>handlePutAway(r)}>Put Away ✓</Button>
-                  <p className="t-muted" style={{fontSize:11,marginBottom:6,alignSelf:"flex-end"}}>
-                    {r.qc==="Pass" ? "✓ QC Pass — inventory will update" : r.qc==="Fail" ? "✕ QC Fail — no stock update" : "Set QC before put away"}
-                  </p>
                 </div>
               </div>
             ))
