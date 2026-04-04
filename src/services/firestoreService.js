@@ -6,13 +6,13 @@ import {
 
 // ── Paste your Firebase config here ──────────────────────
 const firebaseConfig = {
-  apiKey: "AIzaSyCjHEbe3LowHR8U8a3IL6jMeXneJT0tsQk",
-  authDomain: "inventory-ms-b5527.firebaseapp.com",
-  projectId: "inventory-ms-b5527",
-  storageBucket: "inventory-ms-b5527.firebasestorage.app",
-  messagingSenderId: "951398890398",
-  appId: "1:951398890398:web:11881b7b5e8346e677f48f",
-  measurementId: "G-SN5DXSFHZC"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  measurementId: import.meta.env.VITE_FIREBASE_MEASUREMENT_ID,
 };
 // ─────────────────────────────────────────────────────────
 
