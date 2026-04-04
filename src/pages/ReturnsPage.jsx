@@ -44,7 +44,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
     const pvIds   = new Set([...pv, ...rto, ...rpv].map(r => r.orderId));
     setShipped(customers.filter(c => c.status === "Shipped" && !doneIds.has(c.orderId) && !pvIds.has(c.orderId)));
     setPvItems(pv.filter(r => r.status === "Pending"));
-    const pendingRto = rto.filter(r => r.status !== "Done");
+    const pendingRto = rto.filter(r => r.status !== "Done" && r.status !== "Sent to RPV");
     setRtoItems(pendingRto);
     // Seed processQty defaults for any new items (don't overwrite user edits already in state)
     setProcessQtys(prev => {
@@ -127,6 +127,8 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
       setToast({ msg:`${pQty} unit(s) → RPV · ${remaining} remaining in RTO`, type:"success" });
     } else {
       await updateItem("rtoprocess", item.id, { status:"Sent to RPV" });
+      // Remove immediately from local state — don't wait for refresh()
+      setRtoItems(p => p.filter(r => r.id !== item.id));
       setScanLocs(p => { const n={...p}; delete n[item.id]; return n; });
       setProcessQtys(p => { const n={...p}; delete n[item.id]; return n; });
       setToast({ msg:`All ${pQty} unit(s) moved to RPV — ${item.returnId}`, type:"success" });
@@ -278,7 +280,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
   return (
     <div>
       {toast && <Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
-      <SectionHeader title="Returns"/>
+      <SectionHeader title="Returns" subtitle="Return Customer List → PV → RTO / RPV"/>
       <div className="ims-tab-bar">
         {TABS.map(t=>(
           <button key={t} className={`ims-tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>
