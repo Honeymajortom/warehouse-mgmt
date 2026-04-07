@@ -3,6 +3,9 @@ import {
   getFirestore, collection, getDocs, addDoc,
   deleteDoc, doc, updateDoc, query, where, orderBy,
 } from "firebase/firestore";
+// Auth is initialised here so it shares the same app instance
+import { getAuth } from "firebase/auth";
+export { getAuth };   // re-export so authService can grab it without re-initialising
 
 // ── Paste your Firebase config here ──────────────────────
 const firebaseConfig = {
@@ -101,4 +104,16 @@ export const genTxnId = () => {
   const d = new Date();
   const date = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
   return `TXN-${date}-${Math.floor(1000+Math.random()*9000)}`;
+};
+
+export const genQcId = () => {
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  return `QC-${date}-${Math.floor(1000+Math.random()*9000)}`;
+};
+
+export const genGrnReceivingId = () => {
+  const d = new Date();
+  const date = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
+  return `GRNR-${date}-${Math.floor(1000+Math.random()*9000)}`;
 };
