@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { getAll, searchByField, updateItem, addItem, genTxnId } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
-import { CATEGORY_LIST, PICK_ZONES, DEFAULT_ZONE_MAP } from "../data/categories.js";
+import { CATEGORY_LIST, PICK_ZONES, DEFAULT_ZONE_MAP, CATEGORIES } from "../data/categories.js";
 
 const TABS = ["Put-Away Queue","Put-Away Data","Inventory Mapping"];
 
@@ -167,12 +167,13 @@ export default function PutAwayPage() {
             ? <div style={{display:"flex",alignItems:"center",justifyContent:"center",padding:64}}><div className="spin" style={{width:24,height:24,border:"2px solid var(--border)",borderTopColor:"var(--accent)",borderRadius:"50%"}}/></div>
             : <div className="ims-table-wrap">
                 <table className="ims-table">
-                  <thead><tr>{["GRN No","QC ID","SKU","Product","Pass Qty","Batch","Scan Location","Pick Zone","Action"].map(c=><th key={c}>{c}</th>)}</tr></thead>
+                  <thead><tr>{["PO Number","GRN No","QC ID","SKU","Product","Pass Qty","Batch","Scan Location","Pick Zone","Action"].map(c=><th key={c}>{c}</th>)}</tr></thead>
                   <tbody>
                     {filtered.length===0
-                      ? <tr><td colSpan={9} className="t-muted" style={{padding:"48px 16px",textAlign:"center"}}>No pending items</td></tr>
+                      ? <tr><td colSpan={10} className="t-muted" style={{padding:"48px 16px",textAlign:"center"}}>No pending items</td></tr>
                       : filtered.map(r=>(
                         <tr key={r.id}>
+                          <td className="mono" style={{padding:"12px 16px"}}><span className="t-accent">{r.poNumber||"—"}</span></td>
                           <td className="mono" style={{padding:"12px 16px"}}>{r.grnNumber}</td>
                           <td className="mono" style={{padding:"12px 16px"}}><span className="t-accent">{r.qcId||"—"}</span></td>
                           <td className="mono" style={{padding:"12px 16px"}}>{r.skuId}</td>
@@ -232,67 +233,122 @@ export default function PutAwayPage() {
       {/* ── Inventory Mapping ── */}
       {tab==="Inventory Mapping"&&(
         <div style={{display:"flex",flexDirection:"column",gap:20}}>
+          {/* Info strip */}
           <div className="ims-accent-box">
             <p className="t-secondary" style={{margin:0,fontSize:12}}>
-              Each Pick Zone must contain exactly <strong>4 categories</strong>. A category can belong to only one zone.
-              Current counts: {PICK_ZONES.map(z=><span key={z} style={{marginRight:12}}><strong>{z}</strong>: {zoneGroups[z]?.length||0}/4</span>)}
+              Each Pick Zone holds exactly <strong>4 categories</strong>. A category can only belong to one zone.
+              To move a category, its target zone must have a free slot — swap first if needed.
             </p>
           </div>
 
-          {/* Zone columns */}
+          {/* Zone summary cards */}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:16}}>
-            {PICK_ZONES.map(zone=>(
-              <div key={zone} className="ims-panel">
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
-                  <span className="ims-badge ims-badge-violet" style={{fontSize:13,padding:"4px 14px",fontWeight:800}}>{zone}</span>
-                  <span className="t-muted" style={{fontSize:12}}>{zoneGroups[zone]?.length||0} / 4 categories</span>
+            {PICK_ZONES.map(zone=>{
+              const cats = CATEGORY_LIST.filter(c=>zoneMap[c]===zone);
+              const full  = cats.length >= 4;
+              return(
+                <div key={zone} className="ims-panel" style={{border:full?"2px solid var(--success)":"1px solid var(--border)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+                    <span className="ims-badge ims-badge-violet" style={{fontSize:13,padding:"4px 14px",fontWeight:800}}>{zone}</span>
+                    <span className={full?"t-success":"t-muted"} style={{fontSize:12,fontWeight:full?700:400}}>
+                      {cats.length} / 4 {full?"✓ Full":""}
+                    </span>
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                    {cats.map(cat=>(
+                      <div key={cat} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"7px 10px",borderRadius:7,background:"var(--bg-elevated)",border:"1px solid var(--border)"}}>
+                        <span className="t-primary" style={{fontSize:12,fontWeight:600}}>{cat}</span>
+                        <span className="t-muted" style={{fontSize:10}}>{(CATEGORIES[cat]||[]).length} sub</span>
+                      </div>
+                    ))}
+                    {Array.from({length:4-cats.length}).map((_,i)=>(
+                      <div key={i} style={{padding:"7px 10px",borderRadius:7,border:"2px dashed var(--border)",textAlign:"center"}}>
+                        <span className="t-muted" style={{fontSize:11}}>Empty slot</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div style={{display:"flex",flexDirection:"column",gap:8}}>
-                  {(zoneGroups[zone]||[]).map(cat=>(
-                    <div key={cat} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"8px 12px",borderRadius:8,background:"var(--bg-elevated)",border:"1px solid var(--border)"}}>
-                      <span className="t-primary" style={{fontSize:13,fontWeight:600}}>{cat}</span>
-                      <span className="t-muted" style={{fontSize:11}}>{(CATEGORIES[cat]||[]).length} subcats</span>
-                    </div>
-                  ))}
-                  {(zoneGroups[zone]||[]).length<4&&<div style={{padding:"8px 12px",borderRadius:8,border:"2px dashed var(--border)",textAlign:"center"}}><span className="t-muted" style={{fontSize:12}}>Empty slot</span></div>}
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Reassignment table */}
           <div className="ims-panel">
-            <p className="ims-section-title">Reassign Categories</p>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+              <p className="ims-section-title" style={{margin:0}}>Reassign Categories</p>
+              <div style={{display:"flex",gap:8,alignItems:"center"}}>
+                {PICK_ZONES.map(z=>{
+                  const count=CATEGORY_LIST.filter(c=>zoneMap[c]===z).length;
+                  return <span key={z} className={`ims-badge ${count===4?"ims-badge-green":count>4?"ims-badge-red":"ims-badge-amber"}`}>{z}: {count}/4</span>;
+                })}
+              </div>
+            </div>
             <div className="ims-table-wrap">
               <table className="ims-table">
-                <thead><tr>{["Category","Subcategories","Current Zone","Reassign To"].map(c=><th key={c}>{c}</th>)}</tr></thead>
+                <thead>
+                  <tr>
+                    <th>Category</th>
+                    <th>Subcategories</th>
+                    <th style={{width:120}}>Current Zone</th>
+                    <th style={{width:160}}>Move To</th>
+                  </tr>
+                </thead>
                 <tbody>
-                  {CATEGORY_LIST.map(cat=>(
-                    <tr key={cat}>
-                      <td style={{padding:"10px 16px",fontWeight:600}}>{cat}</td>
-                      <td style={{padding:"10px 16px"}} className="t-muted">{(CATEGORIES[cat]||[]).join(", ")}</td>
-                      <td style={{padding:"10px 16px"}}><Badge color="violet">{zoneMap[cat]||"Unassigned"}</Badge></td>
-                      <td style={{padding:"10px 16px"}}>
-                        <select className="ims-input ims-input-sm" style={{width:110}}
-                          value={zoneMap[cat]||""}
-                          onChange={e=>handleZoneChange(cat,e.target.value)}>
-                          <option value="">Select…</option>
-                          {PICK_ZONES.map(z=>(
-                            <option key={z} value={z} disabled={z!==zoneMap[cat]&&(zoneGroups[z]?.length||0)>=4}>
-                              {z}{z!==zoneMap[cat]&&(zoneGroups[z]?.length||0)>=4?" (full)":""}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                    </tr>
-                  ))}
+                  {CATEGORY_LIST.map(cat=>{
+                    const current = zoneMap[cat] || "";
+                    return(
+                      <tr key={cat}>
+                        <td style={{padding:"10px 16px",fontWeight:600}}>{cat}</td>
+                        <td style={{padding:"10px 16px",maxWidth:280,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}} className="t-muted">
+                          {(CATEGORIES[cat]||[]).slice(0,3).join(", ")}{(CATEGORIES[cat]||[]).length>3?"…":""}
+                        </td>
+                        <td style={{padding:"10px 16px"}}>
+                          <Badge color="violet">{current||"Unassigned"}</Badge>
+                        </td>
+                        <td style={{padding:"10px 16px"}}>
+                          <select
+                            className="ims-input ims-input-sm"
+                            style={{width:120}}
+                            value={current}
+                            onChange={e=>{
+                              const newZone = e.target.value;
+                              if (!newZone) return;
+                              if (newZone === current) return;
+                              // Count categories ALREADY in target zone (excluding this cat)
+                              const alreadyInTarget = CATEGORY_LIST.filter(c => c!==cat && zoneMap[c]===newZone).length;
+                              if (alreadyInTarget >= 4) {
+                                setToast({msg:`${newZone} is full (4/4). Reassign a category from it first.`,type:"error"});
+                                return;
+                              }
+                              setZoneMap(p=>({...p,[cat]:newZone}));
+                            }}>
+                            {PICK_ZONES.map(z=>{
+                              const countInZone = CATEGORY_LIST.filter(c=>c!==cat&&zoneMap[c]===z).length;
+                              const isFull = countInZone >= 4 && z !== current;
+                              return(
+                                <option key={z} value={z}>
+                                  {z} ({countInZone + (zoneMap[cat]===z?1:0)}/4){isFull?" — FULL":""}
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
-            <div style={{marginTop:20}}>
+            <div style={{marginTop:20,display:"flex",gap:12,alignItems:"center"}}>
               <Button variant="primary" onClick={handleSaveMapping} disabled={mappingSaving}>
                 {mappingSaving?"Saving…":"💾 Save Mapping"}
               </Button>
+              {/* Validation warning */}
+              {PICK_ZONES.some(z=>CATEGORY_LIST.filter(c=>zoneMap[c]===z).length!==4)&&(
+                <span className="t-warning" style={{fontSize:12}}>
+                  ⚠ Each zone must have exactly 4 categories before saving
+                </span>
+              )}
             </div>
           </div>
         </div>

@@ -35,15 +35,28 @@ export default function GRNPage() {
     setLoading(true);
     const [grn, purchases, grnr] = await Promise.all([getAll("grn"),getAll("purchases"),getAll("grnreceiving")]);
 
-    // Build unique PO summaries — EXCLUDE closed/completed POs
+    // PO numbers that already have a processed GRN (QC done or put away) — exclude these
+    const processedPoNums = new Set(
+      grn
+        .filter(g => g.status === "QC Completed" || g.status === "Put Away")
+        .map(g => g.poNumber)
+    );
+
+    // Build unique PO summaries
     const poMap = {};
     purchases.forEach(p => {
       if (!poMap[p.poNumber]) poMap[p.poNumber] = { poNumber:p.poNumber, vendorName:p.vendorName||"—", purchaseDate:p.purchaseDate||p.createdAt, status:p.status||"ACTIVE", items:[] };
       poMap[p.poNumber].items.push(p);
       if (p.status==="COMPLETED") poMap[p.poNumber].status="COMPLETED";
     });
-    // Only show ACTIVE POs (filter out COMPLETED)
-    setPoList(Object.values(poMap).filter(po => po.status!=="COMPLETED" && po.status!=="GRN Done"));
+
+    // Exclude: (a) purchases manually marked COMPLETED/GRN Done
+    //          (b) POs whose GRN has already been QC-completed or put away
+    setPoList(Object.values(poMap).filter(po =>
+      po.status !== "COMPLETED" &&
+      po.status !== "GRN Done"  &&
+      !processedPoNums.has(po.poNumber)
+    ));
     setGrnList(grn);
 
     const pending = grnr.filter(r=>r.status!=="Done"&&r.status!=="Deleted");
