@@ -47,3 +47,13 @@ export const logoutAdmin = () => signOut(auth);
 
 // ── Auth state observer ───────────────────────────────────────
 export const onAuth = (cb) => onAuthStateChanged(auth, cb);
+
+// ── Audit helper — call this before any addItem/updateItem ────
+export const getAuditFields = () => {
+  const user = auth.currentUser;
+  return {
+    createdBy:    user?.displayName || user?.email || "Unknown",
+    createdByUid: user?.uid         || "",
+    timestamp:    new Date().toISOString(),
+  };
+};
