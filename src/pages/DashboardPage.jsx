@@ -57,7 +57,7 @@ export default function DashboardPage() {
     <div style={{display:"flex",flexDirection:"column",gap:24}}>
       <div>
         <h1 className="gradient-text" style={{fontSize:30,fontWeight:600,margin:0,fontFamily:"'Syne',sans-serif"}}>Dashboard</h1>
-        <p className="t-secondary" style={{fontSize:13,marginTop:6}}>Inventory Management System — MIDC Eduspark</p>
+        <p className="t-secondary" style={{fontSize:13,marginTop:6}}>3APJ Warehouse Management System</p>
       </div>
 
       <div className="ims-kpi-grid">
@@ -111,6 +111,18 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+      {/* Footer Credit */}
+<div style={{
+  textAlign: "center",
+  padding: "16px 0",
+  fontSize: "14px",
+  color: "var(--text-primary)",
+  borderTop: "1px solid var(--border)",
+  marginTop: "30px",
+  opacity: 0.8
+}}>
+  © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
+</div>
     </div>
   );
 }

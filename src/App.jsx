@@ -86,7 +86,7 @@ export default function App() {
         }}>📦</div>
         <div className="spin" style={{ width:24, height:24,
           border:"2px solid var(--border)", borderTopColor:"var(--accent)", borderRadius:"50%" }}/>
-        <p style={{ color:"var(--text-secondary)", fontSize:13, margin:0 }}>Loading MIDC IMS…</p>
+        <p style={{ color:"var(--text-secondary)", fontSize:13, margin:0 }}>Loading 3APJ WMS…</p>
       </div>
     );
   }
@@ -104,7 +104,7 @@ export default function App() {
       <div className="ims-main-col">
         {/* Topbar */}
         <div className="ims-topbar">
-          <span className="t-muted"    style={{fontSize:12}}>MIDC IMS</span>
+          <span className="t-muted"    style={{fontSize:12}}>3APJ WMS</span>
           <span className="t-muted"    style={{fontSize:12}}>›</span>
           <span className="t-primary"  style={{fontSize:13,fontWeight:600,fontFamily:"'Syne',sans-serif"}}>
             {PAGE_TITLES[active]}

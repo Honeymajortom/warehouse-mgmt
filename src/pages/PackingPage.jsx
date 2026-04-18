@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import JsBarcode from "jsbarcode";
 import { getAll, searchByField, updateItem, addItem } from "../services/firestoreService";
+import { getAuditFields } from "../services/authService";
 import { Badge, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 
 const makeAwb = id =>
@@ -9,10 +10,7 @@ const makeAwb = id =>
 function BarcodeEl({ value, svgRef }) {
   useEffect(() => {
     if (!svgRef?.current || !value) return;
-    JsBarcode(svgRef.current, value, {
-      format:"CODE128", width:2, height:48,
-      displayValue:false, margin:0, background:"transparent", lineColor:"currentColor",
-    });
+    JsBarcode(svgRef.current, value, { format:"CODE128", width:2, height:48, displayValue:false, margin:0, background:"transparent", lineColor:"currentColor" });
   }, [value]);
   return <svg ref={svgRef} style={{ width:"100%", maxWidth:360, color:"var(--text-primary)" }}/>;
 }
@@ -20,59 +18,44 @@ function BarcodeEl({ value, svgRef }) {
 const printLabel = (order, awb, paymentType, promiseDate, svgEl) => {
   let svgHtml = "";
   if (svgEl) {
-    const c = svgEl.cloneNode(true);
-    c.style.color="#000";
+    const c = svgEl.cloneNode(true); c.style.color="#000";
     c.querySelectorAll("rect,path").forEach(el=>{if(!el.getAttribute("fill")||el.getAttribute("fill")==="currentColor")el.setAttribute("fill","#000");});
     svgHtml = c.outerHTML;
   }
   const fields = [
-    ["Order ID",              order.orderId],
-    ["AWB No.",               awb],
-    ["Payment Type",          paymentType],
-    ["Customer Promise Date", promiseDate||"—"],
-    ["Customer",              order.customerName||order.name],
-    ["Address",               order.address||"—"],
-    ["Vendor Name",           order.vendorName||"—"],
-    ["Vendor GST No.",        order.vendorGst||"—"],
-    ["SKU ID",                order.skuId],
-    ["SKU Name",              order.productName],
-    ["Quantity",              order.pickedQty??order.orderedQty??order.quantity],
-    ["Batch No.",             order.batch||"—"],
-    ["MFG Date",              order.mfgDate||"—"],
-    ["Expiry Date",           order.expiryDate||"—"],
+    ["Order ID",order.orderId],["AWB No.",awb],["Payment Type",paymentType],
+    ["Customer Promise Date",promiseDate||"—"],["Customer",order.customerName||order.name],
+    ["Address",order.address||"—"],["Vendor Name",order.vendorName||"—"],
+    ["Vendor GST No.",order.vendorGst||"—"],["SKU ID",order.skuId],
+    ["SKU Name",order.productName],["Quantity",order.pickedQty??order.orderedQty??order.quantity],
+    ["Batch No.",order.batch||"—"],["MFG Date",order.mfgDate||"—"],["Expiry Date",order.expiryDate||"—"],
   ];
   const win = window.open("","_blank");
   win.document.write(`<!DOCTYPE html><html><head><title>Label — ${order.orderId}</title>
-<style>
-  *{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;color:#111;padding:28px;background:#fff;}
-  .label{border:3px solid #111;border-radius:10px;padding:24px;max-width:580px;margin:0 auto;}
-  .header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:16px;margin-bottom:20px;}
-  .title{font-size:24px;font-weight:900;letter-spacing:.12em;}.brand{font-size:11px;color:#666;margin-top:4px;}
-  .awb-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#888;text-align:right;}
-  .awb-val{font-size:22px;font-weight:900;font-family:monospace;letter-spacing:.1em;text-align:right;}
-  .fields{display:grid;grid-template-columns:1fr 1fr;gap:0;}
-  .field{padding:8px 0;border-bottom:1px solid #eee;}
-  .field:nth-child(odd){padding-right:18px;border-right:1px solid #eee;}
-  .field:nth-child(even){padding-left:18px;}
-  .fl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:2px;}
-  .fv{font-size:13px;font-weight:700;word-break:break-word;}
-  .barcode-wrap{text-align:center;margin-top:18px;padding:12px;border:1px solid #ddd;border-radius:6px;background:#f9f9f9;}
-  .barcode-wrap svg{width:100%;max-width:360px;display:block;margin:0 auto;}
-  .bnum{font-family:monospace;font-size:11px;color:#777;margin-top:6px;letter-spacing:.1em;}
-  .footer{margin-top:14px;font-size:10px;color:#bbb;text-align:center;}
-  @media print{body{padding:0;}}
-</style></head><body><div class="label">
-  <div class="header">
-    <div><div class="title">SHIPPING LABEL</div><div class="brand">MIDC IMS · Eduspark</div></div>
-    <div><div class="awb-lbl">AWB No.</div><div class="awb-val">${awb}</div></div>
-  </div>
-  <div class="fields">${fields.map(([l,v])=>`<div class="field"><div class="fl">${l}</div><div class="fv">${v??'—'}</div></div>`).join("")}</div>
-  <div class="barcode-wrap">
-    ${svgHtml||`<div style="font-family:monospace;font-size:26px;letter-spacing:.15em">||| ${order.orderId} |||</div>`}
-    <div class="bnum">${order.orderId}</div>
-  </div>
-  <div class="footer">Generated by MIDC IMS · ${new Date().toLocaleString()}</div>
-</div><script>window.onload=()=>{window.print();}</script></body></html>`);
+<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;color:#111;padding:28px;background:#fff;}
+.label{border:3px solid #111;border-radius:10px;padding:24px;max-width:580px;margin:0 auto;}
+.header{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:16px;margin-bottom:20px;}
+.title{font-size:24px;font-weight:900;letter-spacing:.12em;}.brand{font-size:11px;color:#666;margin-top:4px;}
+.awb-lbl{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:#888;text-align:right;}
+.awb-val{font-size:22px;font-weight:900;font-family:monospace;letter-spacing:.1em;text-align:right;}
+.fields{display:grid;grid-template-columns:1fr 1fr;gap:0;}
+.field{padding:8px 0;border-bottom:1px solid #eee;}
+.field:nth-child(odd){padding-right:18px;border-right:1px solid #eee;}
+.field:nth-child(even){padding-left:18px;}
+.fl{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#888;margin-bottom:2px;}
+.fv{font-size:13px;font-weight:700;word-break:break-word;}
+.barcode-wrap{text-align:center;margin-top:18px;padding:12px;border:1px solid #ddd;border-radius:6px;background:#f9f9f9;}
+.barcode-wrap svg{width:100%;max-width:360px;display:block;margin:0 auto;}
+.bnum{font-family:monospace;font-size:11px;color:#777;margin-top:6px;letter-spacing:.1em;}
+.footer{margin-top:14px;font-size:10px;color:#bbb;text-align:center;}
+@media print{body{padding:0;}}</style></head><body><div class="label">
+<div class="header"><div><div class="title">SHIPPING LABEL</div><div class="brand">MIDC IMS · Eduspark</div></div>
+<div><div class="awb-lbl">AWB No.</div><div class="awb-val">${awb}</div></div></div>
+<div class="fields">${fields.map(([l,v])=>`<div class="field"><div class="fl">${l}</div><div class="fv">${v??'—'}</div></div>`).join("")}</div>
+<div class="barcode-wrap">${svgHtml||`<div style="font-family:monospace;font-size:26px;letter-spacing:.15em">||| ${order.orderId} |||</div>`}
+<div class="bnum">${order.orderId}</div></div>
+<div class="footer">Generated by MIDC IMS · ${new Date().toLocaleString()}</div></div>
+<script>window.onload=()=>{window.print();}</script></body></html>`);
   win.document.close();
 };
 
@@ -81,11 +64,11 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
   const [packList, setPackList]     = useState([]);
   const [loading, setLoading]       = useState(true);
   const [activeOrder, setActiveOrder] = useState(null);
+  const [productDetails, setProductDetails] = useState(null); // enriched product info
   const [awbNumber, setAwbNumber]   = useState("");
   const [paymentType, setPaymentType] = useState("Prepaid");
   const [promiseDate, setPromiseDate] = useState("");
-  // QC label state
-  const [qcResult, setQcResult]     = useState(null); // "Pass" | "Fail"
+  const [qcResult, setQcResult]     = useState(null); // null | "Pass" | "Fail"
   const [toast, setToast]           = useState(null);
   const barcodeRef = useRef();
 
@@ -97,47 +80,45 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
   };
   useEffect(() => { load(); }, []);
 
+  // Enrich order with full product + customer + vendor details
   const enrichOrder = async (order) => {
-    const [customers, vendors] = await Promise.all([
+    const [customers, vendors, invItems, products] = await Promise.all([
       searchByField("customers","orderId",order.orderId),
       getAll("vendors"),
+      searchByField("inventory","skuId",order.skuId),
+      searchByField("products","skuId",order.skuId),
     ]);
     const customer = customers[0] || {};
     const vendor   = vendors.find(v => v.skuId===order.skuId) || {};
-
-    // Fetch batch/mfg/expiry from inventory
-    const invItems = await searchByField("inventory","skuId",order.skuId);
-    const inv = invItems[0] || {};
-
+    const inv      = invItems[0] || {};
+    const prod     = products[0] || {};
     return {
       ...order,
-      address:     customer.address  || "—",
+      address:      customer.address   || "—",
       customerDate: customer.createdAt ? new Date(customer.createdAt).toLocaleDateString() : "—",
-      vendorName:  vendor.vendorName || "—",
-      vendorGst:   vendor.gstNo      || "—",
-      batch:       inv.batch         || "—",
-      mfgDate:     inv.mfgDate       || "—",
-      expiryDate:  inv.expiryDate    || "—",
+      vendorName:   vendor.vendorName  || prod.vendorName || "—",
+      vendorGst:    vendor.gstNo       || "—",
+      batch:        inv.batch          || "—",
+      mfgDate:      inv.mfgDate        || "—",
+      expiryDate:   inv.expiryDate     || "—",
+      // product attributes for QC
+      brandName:    prod.brandName     || "—",
+      mrp:          prod.mrp           || "—",
+      category:     prod.category      || "—",
+      subcategory:  prod.subcategory   || "—",
+      modelNumber:  prod.modelNumber   || "—",
+      ean:          prod.ean           || "—",
+      imei:         prod.imei          || "—",
+      netWeight:    prod.netWeight     || "—",
+      imageBase64:  prod.imageBase64   || inv.imageBase64 || "",
+      imageUrl:     prod.imageUrl      || inv.imageUrl    || "",
     };
   };
 
-  useEffect(() => {
-    if (packOrder) {
-      enrichOrder(packOrder).then(enriched => {
-        setActiveOrder(enriched);
-        setAwbNumber(makeAwb(enriched.orderId));
-        setQcResult(null);
-        setPaymentType("Prepaid");
-        setPromiseDate("");
-        setTab("Packing");
-        clearPackOrder();
-      });
-    }
-  }, [packOrder]);
-
-  const handleStartPacking = async (order) => {
+  const openOrder = async (order) => {
     const enriched = await enrichOrder(order);
     setActiveOrder(enriched);
+    setProductDetails(enriched);
     setAwbNumber(makeAwb(enriched.orderId));
     setQcResult(null);
     setPaymentType("Prepaid");
@@ -145,76 +126,83 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
     setTab("Packing");
   };
 
-  // QC Pass → mark shipped
-  const handleQCPass = async () => {
-    setQcResult("Pass");
-  };
+  useEffect(() => {
+    if (packOrder) {
+      openOrder(packOrder).then(() => clearPackOrder());
+    }
+  }, [packOrder]);
 
   const handleShipped = async () => {
-    if (!activeOrder) return;
+    if (!activeOrder || qcResult !== "Pass") return;
+    const audit = getAuditFields();
     const [records, customers] = await Promise.all([
       searchByField("pickingdata","orderId",activeOrder.orderId),
       searchByField("customers","orderId",activeOrder.orderId),
     ]);
-    for (const r of records)   await updateItem("pickingdata",r.id,{status:"Shipped"});
-    for (const c of customers) await updateItem("customers",c.id,{status:"Shipped"});
+    for (const r of records)   await updateItem("pickingdata",r.id,{status:"Shipped",...audit});
+    for (const c of customers) await updateItem("customers",c.id,{status:"Shipped",...audit});
     setToast({ msg:`Order ${activeOrder.orderId} shipped`, type:"success" });
     setTimeout(() => {
       goToReturns({...activeOrder, status:"Shipped"});
-      setActiveOrder(null);
-      setQcResult(null);
-      setTab("Pack Orders");
-      load();
+      setActiveOrder(null); setQcResult(null);
+      setTab("Pack Orders"); load();
     }, 1200);
   };
 
-  // QC Fail → move to customer return queue
   const handleQCFail = async () => {
     setQcResult("Fail");
     if (!activeOrder) return;
-    await addItem("customerreturns", {
-      orderId:     activeOrder.orderId,
-      customerName: activeOrder.customerName,
-      skuId:       activeOrder.skuId,
-      productName: activeOrder.productName,
-      qty:         activeOrder.pickedQty || activeOrder.orderedQty,
-      reason:      "QC Failed during packing",
-      status:      "Pending",
-      createdAt:   new Date().toISOString(),
+    const audit = getAuditFields();
+    await addItem("customerreturns",{
+      orderId:activeOrder.orderId, customerName:activeOrder.customerName,
+      skuId:activeOrder.skuId, productName:activeOrder.productName,
+      qty:activeOrder.pickedQty||activeOrder.orderedQty,
+      reason:"QC Failed during packing", status:"Pending", ...audit,
     });
     const customers = await searchByField("customers","orderId",activeOrder.orderId);
-    for (const c of customers) await updateItem("customers",c.id,{status:"In Transit"});
+    for (const c of customers) await updateItem("customers",c.id,{status:"In Transit",...audit});
     setToast({ msg:`QC Failed — ${activeOrder.orderId} moved to Customer Return Queue`, type:"error" });
   };
 
   const labelFields = activeOrder ? [
-    ["Order ID",              activeOrder.orderId],
-    ["AWB No.",               awbNumber],
-    ["Payment Type",          paymentType],
-    ["Customer Promise Date", promiseDate||"—"],
-    ["Customer",              activeOrder.customerName||activeOrder.name],
-    ["Address",               activeOrder.address],
-    ["Vendor Name",           activeOrder.vendorName],
-    ["Vendor GST No.",        activeOrder.vendorGst],
-    ["SKU ID",                activeOrder.skuId],
-    ["SKU Name",              activeOrder.productName],
-    ["Quantity",              activeOrder.pickedQty??activeOrder.orderedQty],
-    ["Batch No.",             activeOrder.batch],
-    ["MFG Date",              activeOrder.mfgDate],
-    ["Expiry Date",           activeOrder.expiryDate],
+    ["Order ID",activeOrder.orderId],["AWB No.",awbNumber],
+    ["Payment Type",paymentType],["Customer Promise Date",promiseDate||"—"],
+    ["Customer",activeOrder.customerName||activeOrder.name],["Address",activeOrder.address],
+    ["Vendor Name",activeOrder.vendorName],["Vendor GST No.",activeOrder.vendorGst],
+    ["SKU ID",activeOrder.skuId],["SKU Name",activeOrder.productName],
+    ["Quantity",activeOrder.pickedQty??activeOrder.orderedQty],
+    ["Batch No.",activeOrder.batch],["MFG Date",activeOrder.mfgDate],["Expiry Date",activeOrder.expiryDate],
   ] : [];
+
+  // QC verification attributes — shown per product for visual check
+  const qcAttributes = productDetails ? [
+    ["Brand",       productDetails.brandName],
+    ["Category",    productDetails.category],
+    ["Subcategory", productDetails.subcategory],
+    ["SKU ID",      productDetails.skuId],
+    ["Model No.",   productDetails.modelNumber],
+    ["MRP",         productDetails.mrp ? `₹${Number(productDetails.mrp).toLocaleString()}` : "—"],
+    ["Net Weight",  productDetails.netWeight],
+    ["EAN",         productDetails.ean],
+    ["IMEI",        productDetails.imei],
+    ["Batch No.",   productDetails.batch],
+    ["MFG Date",    productDetails.mfgDate],
+    ["Expiry Date", productDetails.expiryDate],
+  ] : [];
+
+  const preview = productDetails?.imageBase64 || productDetails?.imageUrl;
 
   return (
     <div>
       {toast && <Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
-      <SectionHeader title="Packing" subtitle="Pack, QC label & dispatch orders"/>
+      <SectionHeader title="Packing" subtitle="QC → Label → Dispatch"/>
       <div className="ims-tab-bar">
         {["Pack Orders","Packing"].map(t=>(
           <button key={t} className={`ims-tab${tab===t?" active":""}`} onClick={()=>setTab(t)}>{t}</button>
         ))}
       </div>
 
-      {/* ── Pack Orders list ── */}
+      {/* ── Pack Orders ── */}
       {tab==="Pack Orders" && (
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <Button variant="ghost" onClick={load} style={{width:"fit-content"}}>↻ Refresh</Button>
@@ -224,7 +212,7 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
               </div>
             : <div className="ims-table-wrap">
                 <table className="ims-table">
-                  <thead><tr>{["Order ID","Customer","SKU ID","Product","Ordered Qty","Pick Qty","Status","Action"].map(c=><th key={c}>{c}</th>)}</tr></thead>
+                  <thead><tr>{["Order ID","Customer","SKU","Product","Ordered Qty","Pick Qty","Status","Action"].map(c=><th key={c}>{c}</th>)}</tr></thead>
                   <tbody>
                     {packList.length===0
                       ? <tr><td colSpan={8} className="t-muted" style={{padding:"48px 16px",textAlign:"center"}}>No orders ready to pack</td></tr>
@@ -240,8 +228,7 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
                             <Badge color={r.status==="Shipped"?"green":r.status==="Packing"?"violet":"cyan"}>{r.status}</Badge>
                           </td>
                           <td style={{padding:"12px 16px"}}>
-                            {r.status!=="Shipped" &&
-                              <Button variant="primary" onClick={()=>handleStartPacking(r)}>Start Packing</Button>}
+                            {r.status!=="Shipped" && <Button variant="primary" onClick={()=>openOrder(r)}>Start Packing</Button>}
                           </td>
                         </tr>
                       ))
@@ -253,96 +240,148 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
         </div>
       )}
 
-      {/* ── Packing / QC Label ── */}
+      {/* ── Packing (QC → Label) ── */}
       {tab==="Packing" && (
-        <div style={{display:"flex",flexDirection:"column",gap:20,maxWidth:680}}>
+        <div style={{display:"flex",flexDirection:"column",gap:20,maxWidth:720}}>
           {!activeOrder
             ? <div className="ims-panel" style={{textAlign:"center"}}>
-                <p className="t-muted" style={{marginBottom:16}}>No order selected. Go to Pack Orders and click Start Packing.</p>
-                <Button variant="ghost" onClick={()=>setTab("Pack Orders")}>← Back</Button>
+                <p className="t-muted" style={{marginBottom:16}}>No order selected.</p>
+                <Button variant="ghost" onClick={()=>setTab("Pack Orders")}>← Back to Pack Orders</Button>
               </div>
             : <>
-                {/* Editable fields */}
-                <div className="ims-panel" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
-                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    <label className="ims-label">Payment Type</label>
-                    <select className="ims-input" value={paymentType} onChange={e=>setPaymentType(e.target.value)}>
-                      <option>Prepaid</option>
-                      <option>Cash on Delivery</option>
-                      <option>Credit</option>
-                    </select>
-                  </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                    <label className="ims-label">Customer Promise Date</label>
-                    <input type="date" className="ims-input" value={promiseDate} onChange={e=>setPromiseDate(e.target.value)}/>
-                  </div>
-                </div>
-
-                {/* Shipping Label */}
-                <div className="ims-card" style={{padding:28,borderRadius:16}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderBottom:"2px solid var(--border)",paddingBottom:18,marginBottom:20}}>
+                {/* ── Step 1: QC Check ── */}
+                <div className="ims-panel">
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:18,paddingBottom:14,borderBottom:"1px solid var(--border)"}}>
                     <div>
-                      <div className="gradient-text" style={{fontSize:22,fontWeight:900,letterSpacing:"0.12em",fontFamily:"'Syne',sans-serif"}}>SHIPPING LABEL</div>
-                      <div className="t-muted" style={{fontSize:11,marginTop:3}}>MIDC IMS — Eduspark</div>
+                      <p className="ims-section-title" style={{margin:0}}>Step 1 — QC Verification</p>
+                      <p className="t-muted" style={{fontSize:12,margin:"4px 0 0"}}>Inspect the product against all attributes before proceeding</p>
                     </div>
-                    <div style={{textAlign:"right"}}>
-                      <div className="t-muted" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>AWB No.</div>
-                      <div className="t-accent" style={{fontSize:20,fontWeight:900,fontFamily:"monospace",letterSpacing:"0.1em"}}>{awbNumber}</div>
+                    {qcResult && (
+                      <Badge color={qcResult==="Pass"?"green":"red"} >{qcResult==="Pass"?"✓ QC Passed":"✕ QC Failed"}</Badge>
+                    )}
+                  </div>
+
+                  {/* Product card */}
+                  <div style={{display:"flex",gap:20,marginBottom:20}}>
+                    {/* Image */}
+                    <div style={{width:120,height:120,borderRadius:12,border:"1px solid var(--border)",overflow:"hidden",background:"var(--bg-elevated)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:36}}>
+                      {preview
+                        ? <img src={preview} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>
+                        : "📦"}
+                    </div>
+                    {/* Core identifiers */}
+                    <div style={{flex:1}}>
+                      <p className="t-primary" style={{margin:"0 0 4px",fontSize:18,fontWeight:800,fontFamily:"'Syne',sans-serif"}}>{activeOrder.productName}</p>
+                      <p className="t-muted"   style={{margin:"0 0 8px",fontSize:12,fontFamily:"monospace"}}>{activeOrder.skuId}</p>
+                      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                        {productDetails.category  && <Badge color="violet">{productDetails.category}</Badge>}
+                        {productDetails.subcategory && <Badge color="teal">{productDetails.subcategory}</Badge>}
+                        {productDetails.brandName && productDetails.brandName!=="—" && <Badge color="cyan">{productDetails.brandName}</Badge>}
+                      </div>
                     </div>
                   </div>
-                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}>
-                    {labelFields.map(([l,v],i)=>(
-                      <div key={l} style={{padding:"9px 0",borderBottom:"1px solid var(--border)",
-                        ...(i%2===0?{paddingRight:20,borderRight:"1px solid var(--border)"}:{paddingLeft:20})}}>
-                        <div className="t-muted" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:3}}>{l}</div>
-                        <div className="t-primary" style={{fontSize:13,fontWeight:700,wordBreak:"break-word"}}>{v??'—'}</div>
+
+                  {/* All attributes grid */}
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:0,borderTop:"1px solid var(--border)",borderLeft:"1px solid var(--border)"}}>
+                    {qcAttributes.map(([l,v])=>(
+                      <div key={l} style={{padding:"9px 14px",borderBottom:"1px solid var(--border)",borderRight:"1px solid var(--border)"}}>
+                        <div className="t-muted"    style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.07em",marginBottom:3}}>{l}</div>
+                        <div className="t-primary"  style={{fontSize:13,fontWeight:600}}>{v||"—"}</div>
                       </div>
                     ))}
                   </div>
-                  {/* Barcode */}
-                  <div style={{marginTop:20,padding:"14px 16px",borderRadius:8,border:"1px solid var(--border)",background:"var(--bg-elevated)",textAlign:"center"}}>
-                    <BarcodeEl value={activeOrder.orderId} svgRef={barcodeRef}/>
-                    <div className="t-secondary" style={{fontSize:12,marginTop:6,fontFamily:"monospace",letterSpacing:"0.08em"}}>{activeOrder.orderId}</div>
-                  </div>
+
+                  {/* QC buttons — only shown if not yet decided */}
+                  {!qcResult && (
+                    <div style={{marginTop:20,display:"flex",gap:12,alignItems:"center"}}>
+                      <Button variant="success" onClick={()=>setQcResult("Pass")}>✓ QC Pass</Button>
+                      <Button variant="danger"  onClick={handleQCFail}>✕ QC Fail</Button>
+                      <span className="t-muted" style={{fontSize:12}}>QC decision is required to proceed</span>
+                    </div>
+                  )}
+
+                  {/* QC result banners */}
+                  {qcResult==="Pass" && (
+                    <div className="ims-success-box" style={{marginTop:16}}>
+                      <p className="t-success" style={{fontWeight:700,margin:"0 0 4px"}}>✓ QC Passed — Shipping label is now available</p>
+                      <p className="t-muted" style={{fontSize:12,margin:0}}>Fill in label details below, then export and mark as shipped</p>
+                    </div>
+                  )}
+                  {qcResult==="Fail" && (
+                    <div style={{marginTop:16,padding:"14px 18px",borderRadius:8,background:"var(--badge-red-bg)",border:"1px solid var(--badge-red-br)"}}>
+                      <p className="t-danger" style={{fontWeight:700,margin:"0 0 4px"}}>✕ QC Failed — Order sent to Customer Return Queue</p>
+                      <p className="t-muted"  style={{fontSize:12,margin:0}}>Customer status reset to In Transit</p>
+                    </div>
+                  )}
                 </div>
 
-                {/* QC section */}
-                <div className="ims-panel">
-                  <p className="ims-section-title">Packing QC Check</p>
-                  {qcResult
-                    ? qcResult==="Pass"
-                      ? <div className="ims-success-box" style={{marginBottom:16}}>
-                          <p className="t-success" style={{fontWeight:700,margin:"0 0 4px"}}>✓ QC Passed — Ready to ship</p>
-                          <p className="t-muted" style={{fontSize:12,margin:0}}>Click Mark as Shipped to dispatch</p>
-                        </div>
-                      : <div className="ims-elevated" style={{marginBottom:16,padding:"14px 18px",border:"1px solid var(--badge-red-br)",borderRadius:8}}>
-                          <p className="t-danger" style={{fontWeight:700,margin:"0 0 4px"}}>✕ QC Failed — Moved to Customer Return Queue</p>
-                          <p className="t-muted"  style={{fontSize:12,margin:0}}>Order status reset to In Transit</p>
-                        </div>
-                    : <div style={{display:"flex",gap:12}}>
-                        <Button variant="success" onClick={handleQCPass}>✓ QC Pass</Button>
-                        <Button variant="danger"  onClick={handleQCFail}>✕ QC Fail</Button>
+                {/* ── Step 2: Label (only after QC Pass) ── */}
+                {qcResult==="Pass" && (
+                  <>
+                    {/* Label config */}
+                    <div className="ims-panel" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16}}>
+                      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                        <label className="ims-label">Payment Type</label>
+                        <select className="ims-input" value={paymentType} onChange={e=>setPaymentType(e.target.value)}>
+                          <option>Prepaid</option><option>Cash on Delivery</option><option>Credit</option>
+                        </select>
                       </div>
-                  }
-                </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                        <label className="ims-label">Customer Promise Date</label>
+                        <input type="date" className="ims-input" value={promiseDate} onChange={e=>setPromiseDate(e.target.value)}/>
+                      </div>
+                    </div>
 
-                {/* Actions */}
-                <div style={{display:"flex",gap:12}}>
-                  <Button onClick={()=>printLabel(activeOrder,awbNumber,paymentType,promiseDate,barcodeRef.current)} variant="ghost">
-                    🖨 Export / Print Label
+                    {/* Shipping Label card */}
+                    <div className="ims-card" style={{padding:28,borderRadius:16}}>
+                      <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",borderBottom:"2px solid var(--border)",paddingBottom:18,marginBottom:20}}>
+                        <div>
+                          <div className="gradient-text" style={{fontSize:22,fontWeight:900,letterSpacing:"0.12em",fontFamily:"'Syne',sans-serif"}}>SHIPPING LABEL</div>
+                          <div className="t-muted" style={{fontSize:11,marginTop:3}}>MIDC IMS — Eduspark</div>
+                        </div>
+                        <div style={{textAlign:"right"}}>
+                          <div className="t-muted" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:4}}>AWB No.</div>
+                          <div className="t-accent" style={{fontSize:20,fontWeight:900,fontFamily:"monospace",letterSpacing:"0.1em"}}>{awbNumber}</div>
+                        </div>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:0}}>
+                        {labelFields.map(([l,v],i)=>(
+                          <div key={l} style={{padding:"9px 0",borderBottom:"1px solid var(--border)",
+                            ...(i%2===0?{paddingRight:20,borderRight:"1px solid var(--border)"}:{paddingLeft:20})}}>
+                            <div className="t-muted" style={{fontSize:10,fontWeight:700,textTransform:"uppercase",letterSpacing:"0.08em",marginBottom:3}}>{l}</div>
+                            <div className="t-primary" style={{fontSize:13,fontWeight:700,wordBreak:"break-word"}}>{v??'—'}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Barcode */}
+                      <div style={{marginTop:20,padding:"14px 16px",borderRadius:8,border:"1px solid var(--border)",background:"var(--bg-elevated)",textAlign:"center"}}>
+                        <BarcodeEl value={activeOrder.orderId} svgRef={barcodeRef}/>
+                        <div className="t-secondary" style={{fontSize:12,marginTop:6,fontFamily:"monospace",letterSpacing:"0.08em"}}>{activeOrder.orderId}</div>
+                      </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div style={{display:"flex",gap:12}}>
+                      <Button onClick={()=>printLabel(activeOrder,awbNumber,paymentType,promiseDate,barcodeRef.current)} variant="ghost">
+                        🖨 Export / Print Label
+                      </Button>
+                      <Button onClick={handleShipped} variant="success">✓ Mark as Shipped</Button>
+                      <Button onClick={()=>{setTab("Pack Orders");setActiveOrder(null);setQcResult(null);}} variant="ghost">← Back</Button>
+                    </div>
+                    <div className="ims-accent-box">
+                      <p className="t-secondary" style={{margin:0,fontSize:12}}>
+                        Label generated after QC Pass. Click <strong>Mark as Shipped</strong> to dispatch.
+                      </p>
+                    </div>
+                  </>
+                )}
+
+                {/* If QC failed, just show back button */}
+                {qcResult==="Fail" && (
+                  <Button variant="ghost" onClick={()=>{setTab("Pack Orders");setActiveOrder(null);setQcResult(null);}}>
+                    ← Back to Pack Orders
                   </Button>
-                  {qcResult==="Pass" &&
-                    <Button onClick={handleShipped} variant="success">✓ Mark as Shipped</Button>}
-                  <Button onClick={()=>{setTab("Pack Orders");setActiveOrder(null);setQcResult(null);}} variant="ghost">
-                    ← Back
-                  </Button>
-                </div>
-                <div className="ims-accent-box">
-                  <p className="t-secondary" style={{margin:0,fontSize:12}}>
-                    <strong>QC Pass</strong> → Print label → Mark as Shipped ·
-                    <strong> QC Fail</strong> → Order moved to Customer Return Queue
-                  </p>
-                </div>
+                )}
               </>
           }
         </div>

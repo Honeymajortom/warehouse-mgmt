@@ -22,8 +22,8 @@ export default function Sidebar({ active, setActive }) {
       <div className="ims-sidebar-logo">
         {!collapsed && (
           <div>
-            <div className="gradient-text" style={{ fontSize:16, fontWeight:600, letterSpacing:"0.12em", fontFamily:"'Syne',sans-serif" }}>MIDC IMS</div>
-            <div className="t-muted" style={{ fontSize:11, marginTop:2 }}>Eduspark</div>
+            <div className="gradient-text" style={{ fontSize:16, fontWeight:600, letterSpacing:"0.12em", fontFamily:"'Syne',sans-serif" }}>3APJ WMS</div>
+            <div className="t-muted" style={{ fontSize:11, marginTop:2 }}>Advanced Warehouse Management System</div>
           </div>
         )}
         <button className="ims-btn ims-btn-ghost" onClick={() => setCollapsed(p=>!p)}
