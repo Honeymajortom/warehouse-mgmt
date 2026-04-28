@@ -24,12 +24,29 @@ export default function CustomersPage() {
   const [errors, setErrors] = useState({});
 
   useEffect(() => {
-    // Load only products that are actually in inventory (QC-passed, in stock)
-    getAll("inventory").then(inv => {
-      const inStock = inv.filter(i => Number(i.availableStock||0) > 0);
+    // Load in-stock inventory AND current In Transit customer orders
+    // to compute real remaining stock per SKU
+    Promise.all([getAll("inventory"), getAll("customers")]).then(([inv, customers]) => {
+      // Sum quantities already committed to In Transit orders (not yet picked)
+      const committed = {};
+      customers
+        .filter(c => c.status === "In Transit" || c.status === "Pick")
+        .forEach(c => {
+          committed[c.skuId] = (committed[c.skuId] || 0) + Number(c.quantity || 0);
+        });
+
+      const inStock = inv
+        .filter(i => Number(i.availableStock || 0) > 0)
+        .map(i => ({
+          ...i,
+          // Real remaining = inventory stock minus already-committed orders
+          realStock: Math.max(0, Number(i.availableStock || 0) - (committed[i.skuId] || 0)),
+        }))
+        .filter(i => i.realStock > 0); // hide if nothing actually left
+
       setInvProducts(inStock);
     });
-  }, []);
+  }, [tab]); // re-run when switching to Add tab so it's always fresh
 
   const f = k => e => { setForm(p=>({...p,[k]:e.target.value})); setErrors(p=>({...p,[k]:""})); };
 
@@ -45,6 +62,11 @@ export default function CustomersPage() {
     else if (!validatePhone(form.contact)) e.contact = "Enter valid 10-digit mobile";
     if (form.email && !validateEmail(form.email)) e.email = "Enter valid email";
     if (!form.productName)                 e.product = "Select a product";
+    if (form.productName && form.quantity) {
+      const sel = invProducts.find(p => p.productName === form.productName);
+      if (sel && Number(form.quantity) > sel.realStock)
+        e.quantity = `Only ${sel.realStock} units available (after committed orders)`;
+    }
     setErrors(e);
     return Object.keys(e).length === 0;
   };
@@ -127,14 +149,31 @@ export default function CustomersPage() {
                 <option value="">Select product…</option>
                 {invProducts.map((p,i)=>(
                   <option key={i} value={p.productName}>
-                    {p.productName} — {p.availableStock} units @ {p.location||"—"}
+                    {p.productName} — {p.realStock} units available
                   </option>
                 ))}
               </select>
               {errors.product && <span style={{fontSize:11,color:"var(--danger-text)"}}>{errors.product}</span>}
+              {/* Show real stock hint when a product is selected */}
+              {form.productName && (() => {
+                const sel = invProducts.find(p => p.productName === form.productName);
+                if (!sel) return null;
+                return (
+                  <div style={{display:"flex",alignItems:"center",gap:10,padding:"6px 10px",borderRadius:6,background:"var(--bg-elevated)",border:"1px solid var(--border)"}}>
+                    <span className="t-success" style={{fontSize:12,fontWeight:700}}>{sel.realStock} units</span>
+                    <span className="t-muted"   style={{fontSize:11}}>available after committed orders</span>
+                    {sel.availableStock !== sel.realStock && (
+                      <span className="t-warning" style={{fontSize:11}}>({sel.availableStock - sel.realStock} committed)</span>
+                    )}
+                  </div>
+                );
+              })()}
             </div>
             <Input label="SKU ID (auto)" value={form.skuId} readOnly/>
-            <Input label="Quantity" type="number" value={form.quantity} onChange={f("quantity")} placeholder="0"/>
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              <Input label="Quantity" type="number" value={form.quantity} onChange={f("quantity")} placeholder="0"/>
+              {errors.quantity && <span style={{fontSize:11,color:"var(--danger-text)"}}>{errors.quantity}</span>}
+            </div>
             <Select label="Status" value={form.status} onChange={f("status")} options={STATUS_OPTIONS}/>
           </div>
           <div className="ims-accent-box" style={{marginTop:12}}>
