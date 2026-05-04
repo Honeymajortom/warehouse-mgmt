@@ -1,11 +1,10 @@
 import { useState, useEffect } from "react";
-import { getAll, addItem, updateItem, searchByField, genGrnNumber, genQcId, genGrnReceivingId, genTxnId } from "../services/firestoreService";
+import { getAll, addItem, updateItem, deleteItem, searchByField, genGrnNumber, genQcId, genGrnReceivingId, genTxnId } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 
 const STATUS_COLOR = { "PO Created":"cyan","GRN Initiated":"violet","QC In Progress":"amber","QC Completed":"teal","Put Away":"green","GRN Receiving":"red" };
 const TABS = ["GRN List","Create GRN","QC Process","GRN Receiving"];
-
 const ISSUE_TYPES = ["Short Quantity","Damaged","Quality Issue","Wrong Product","Other"];
 
 export default function GRNPage() {
@@ -26,23 +25,26 @@ export default function GRNPage() {
   const [activeGrn, setActiveGrn] = useState(null);
   const [qcRows, setQcRows]       = useState([]);
 
-  // GRN Receiving: per-row issue type and reason
-  const [issueTypes, setIssueTypes] = useState({});  // id → type
-  const [reasons, setReasons]       = useState({});  // id → reason string
-  const [prevReasons, setPrevReasons] = useState([]); // previously used reasons
+  // GRN Receiving
+  const [issueTypes, setIssueTypes] = useState({});
+  const [reasons, setReasons]       = useState({});
+  const [prevReasons, setPrevReasons] = useState([]);
+
+  // ── GRN List: Edit state ──────────────────────────────────
+  const [editGrn, setEditGrn]       = useState(null);  // record being edited
+  const [editGrnForm, setEditGrnForm] = useState({});
+  const [editGrnSaving, setEditGrnSaving] = useState(false);
 
   const load = async () => {
     setLoading(true);
     const [grn, purchases, grnr] = await Promise.all([getAll("grn"),getAll("purchases"),getAll("grnreceiving")]);
 
-    // PO numbers that already have a processed GRN (QC done or put away) — exclude these
     const processedPoNums = new Set(
       grn
         .filter(g => g.status === "QC Completed" || g.status === "Put Away")
         .map(g => g.poNumber)
     );
 
-    // Build unique PO summaries
     const poMap = {};
     purchases.forEach(p => {
       if (!poMap[p.poNumber]) poMap[p.poNumber] = { poNumber:p.poNumber, vendorName:p.vendorName||"—", purchaseDate:p.purchaseDate||p.createdAt, status:p.status||"ACTIVE", items:[] };
@@ -50,8 +52,6 @@ export default function GRNPage() {
       if (p.status==="COMPLETED") poMap[p.poNumber].status="COMPLETED";
     });
 
-    // Exclude: (a) purchases manually marked COMPLETED/GRN Done
-    //          (b) POs whose GRN has already been QC-completed or put away
     setPoList(Object.values(poMap).filter(po =>
       po.status !== "COMPLETED" &&
       po.status !== "GRN Done"  &&
@@ -62,12 +62,59 @@ export default function GRNPage() {
     const pending = grnr.filter(r=>r.status!=="Done"&&r.status!=="Deleted");
     setGrnReceiving(pending);
 
-    // Collect previously used reasons for auto-suggest
     const usedReasons = [...new Set(grnr.filter(r=>r.reason).map(r=>r.reason))];
     setPrevReasons(usedReasons);
     setLoading(false);
   };
   useEffect(()=>{ load(); },[]);
+
+  // ── GRN List: Edit handlers ───────────────────────────────
+  const openEditGrn = (r) => {
+    setEditGrn(r);
+    setEditGrnForm({
+      invoiceNo:  r.invoiceNo||"",
+      vendorName: r.vendorName||"",
+      totalItems: String(r.totalItems||""),
+      status:     r.status||"",
+    });
+  };
+
+  const handleSaveGrn = async () => {
+    if (!editGrn) return;
+    setEditGrnSaving(true);
+    try {
+      const audit = getAuditFields();
+      await updateItem("grn", editGrn.id, {
+        invoiceNo:  editGrnForm.invoiceNo,
+        vendorName: editGrnForm.vendorName,
+        totalItems: Number(editGrnForm.totalItems||0),
+        status:     editGrnForm.status,
+        updatedAt:  audit.timestamp,
+        updatedBy:  audit.createdBy,
+      });
+      setToast({ msg:`GRN ${editGrn.grnNumber} updated`, type:"success" });
+      setEditGrn(null);
+      load();
+    } catch(e) {
+      setToast({ msg:"Update failed: "+e.message, type:"error" });
+    }
+    setEditGrnSaving(false);
+  };
+
+  const handleDeleteGrn = async (r) => {
+    if (!window.confirm(`Delete GRN "${r.grnNumber}"? This will also remove associated GRN lines. This cannot be undone.`)) return;
+    try {
+      // Delete GRN header
+      await deleteItem("grn", r.id);
+      // Delete GRN lines
+      const lines = await searchByField("grnlines","grnNumber",r.grnNumber);
+      for (const l of lines) await deleteItem("grnlines", l.id);
+      setToast({ msg:`GRN ${r.grnNumber} deleted`, type:"success" });
+      load();
+    } catch(e) {
+      setToast({ msg:"Delete failed: "+e.message, type:"error" });
+    }
+  };
 
   // ── Create GRN ───────────────────────────────────────────
   const handleSelectPO = poNumber => {
@@ -130,7 +177,7 @@ export default function GRNPage() {
     setSaving(false); setActiveGrn(null); setQcRows([]); await load(); setTab("GRN List");
   };
 
-  // ── GRN Receiving: Close button ──────────────────────────
+  // ── GRN Receiving ────────────────────────────────────────
   const handleClose = async (item) => {
     const reason = reasons[item.id] || "";
     const issueType = issueTypes[item.id] || "";
@@ -150,13 +197,52 @@ export default function GRNPage() {
 
   const totalPassAll=qcRows.reduce((s,r)=>s+Math.min(Number(r.passQty||0),r.invoiceQty),0);
   const totalFailAll=qcRows.reduce((s,r)=>s+Math.max(0,r.invoiceQty-Math.min(Number(r.passQty||0),r.invoiceQty)),0);
-
-  // Pending receiving count (exclude Done)
   const pendingReceivingQty = grnReceiving.reduce((s,r)=>s+Number(r.failQty||0),0);
+
+  const actionBtnBase = { fontSize:11, padding:"4px 10px", borderRadius:6, fontWeight:700, cursor:"pointer", border:"none" };
 
   return (
     <div>
       {toast&&<Toast message={toast.msg} type={toast.type} onClose={()=>setToast(null)}/>}
+
+      {/* ── GRN Edit Modal ── */}
+      {editGrn&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",display:"flex",alignItems:"center",justifyContent:"center",zIndex:1000}}>
+          <div className="ims-card" style={{padding:28,minWidth:400,maxWidth:500,width:"100%"}}>
+            <p className="ims-section-title" style={{marginBottom:20}}>Edit GRN — <span className="t-accent" style={{fontFamily:"monospace"}}>{editGrn.grnNumber}</span></p>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                <label className="ims-label">Invoice Number</label>
+                <input className="ims-input" value={editGrnForm.invoiceNo} onChange={e=>setEditGrnForm(f=>({...f,invoiceNo:e.target.value}))} placeholder="INV-XXXX"/>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                <label className="ims-label">Vendor Name</label>
+                <input className="ims-input" value={editGrnForm.vendorName} onChange={e=>setEditGrnForm(f=>({...f,vendorName:e.target.value}))}/>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                <label className="ims-label">Total Items</label>
+                <input type="number" className="ims-input" value={editGrnForm.totalItems} onChange={e=>setEditGrnForm(f=>({...f,totalItems:e.target.value}))}/>
+              </div>
+              <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                <label className="ims-label">Status</label>
+                <select className="ims-input" value={editGrnForm.status} onChange={e=>setEditGrnForm(f=>({...f,status:e.target.value}))}>
+                  {["PO Created","GRN Initiated","QC In Progress","QC Completed","Put Away","GRN Receiving"].map(s=>(
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+            </div>
+            <div style={{marginTop:22,padding:"12px 16px",borderRadius:8,background:"var(--badge-red-bg)",border:"1px solid var(--badge-red-br)"}}>
+              <p style={{margin:0,fontSize:11,color:"var(--badge-red-fg)"}}>⚠ Note: Editing a GRN does not alter linked GRN lines, QC results, or put-away records. Use with care.</p>
+            </div>
+            <div style={{display:"flex",gap:10,marginTop:18}}>
+              <Button variant="primary" onClick={handleSaveGrn} disabled={editGrnSaving}>{editGrnSaving?"Saving…":"💾 Save"}</Button>
+              <Button variant="ghost" onClick={()=>setEditGrn(null)}>Cancel</Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <SectionHeader title="GRN Process" subtitle="Goods Receipt Note → QC → Put Away"/>
       <div className="ims-tab-bar">
         {TABS.map(t=>(
@@ -171,21 +257,54 @@ export default function GRNPage() {
       {tab==="GRN List"&&(
         <div style={{display:"flex",flexDirection:"column",gap:16}}>
           <Button variant="ghost" onClick={load} style={{width:"fit-content"}}>↻ Refresh</Button>
-          <Table loading={loading} cols={["GRN No","Invoice No","PO Number","Vendor","Status","Total","QC Pass","QC Fail","By","Date","Action"]} rows={grnList}
-            renderRow={r=>(<>
-              <Td mono><span className="t-success">{r.grnNumber}</span></Td>
-              <Td mono><span className="t-warning">{r.invoiceNo}</span></Td>
-              <Td mono><span className="t-accent">{r.poNumber}</span></Td>
-              <Td>{r.vendorName}</Td>
-              <Td><Badge color={STATUS_COLOR[r.status]||"cyan"}>{r.status}</Badge></Td>
-              <Td>{r.totalItems||"—"}</Td>
-              <Td><span className="t-success" style={{fontWeight:700}}>{r.totalPass??"—"}</span></Td>
-              <Td><span className="t-danger"  style={{fontWeight:700}}>{r.totalFail??"—"}</span></Td>
-              <Td><span className="t-muted" style={{fontSize:11}}>{r.createdBy||"—"}</span></Td>
-              <Td>{r.createdAt?new Date(r.createdAt).toLocaleDateString():"—"}</Td>
-              <Td>{r.status==="QC In Progress"&&<Button variant="amber" onClick={()=>handleResumeQC(r)}>Start QC</Button>}</Td>
-            </>)}
-          />
+          <div className="ims-table-wrap">
+            <table className="ims-table">
+              <thead>
+                <tr>
+                  {["GRN No","Invoice No","PO Number","Vendor","Status","Total","QC Pass","QC Fail","By","Date","Actions"].map(c=>(
+                    <th key={c}>{c}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {loading
+                  ? <tr><td colSpan={11} style={{padding:"48px 16px",textAlign:"center"}}><div className="spin" style={{width:20,height:20,border:"2px solid var(--border)",borderTopColor:"var(--accent)",borderRadius:"50%",margin:"0 auto"}}/></td></tr>
+                  : grnList.length===0
+                    ? <tr><td colSpan={11} className="t-muted" style={{padding:"48px 16px",textAlign:"center"}}>No GRN records yet</td></tr>
+                    : grnList.map(r=>(
+                      <tr key={r.id}>
+                        <Td mono><span className="t-success">{r.grnNumber}</span></Td>
+                        <Td mono><span className="t-warning">{r.invoiceNo}</span></Td>
+                        <Td mono><span className="t-accent">{r.poNumber}</span></Td>
+                        <Td>{r.vendorName}</Td>
+                        <Td><Badge color={STATUS_COLOR[r.status]||"cyan"}>{r.status}</Badge></Td>
+                        <Td>{r.totalItems||"—"}</Td>
+                        <Td><span className="t-success" style={{fontWeight:700}}>{r.totalPass??"—"}</span></Td>
+                        <Td><span className="t-danger"  style={{fontWeight:700}}>{r.totalFail??"—"}</span></Td>
+                        <Td><span className="t-muted" style={{fontSize:11}}>{r.createdBy||"—"}</span></Td>
+                        <Td>{r.createdAt?new Date(r.createdAt).toLocaleDateString():"—"}</Td>
+                        {/* ── Actions ── */}
+                        <td style={{padding:"10px 14px",whiteSpace:"nowrap"}}>
+                          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                            {r.status==="QC In Progress"&&(
+                              <Button variant="amber" onClick={()=>handleResumeQC(r)}>Start QC</Button>
+                            )}
+                            <button
+                              style={{...actionBtnBase,background:"var(--badge-cyan-bg)",color:"var(--badge-cyan-fg)",border:"1px solid var(--badge-cyan-br)"}}
+                              onClick={()=>openEditGrn(r)}
+                            >Edit</button>
+                            <button
+                              style={{...actionBtnBase,background:"var(--badge-red-bg)",color:"var(--badge-red-fg)",border:"1px solid var(--badge-red-br)"}}
+                              onClick={()=>handleDeleteGrn(r)}
+                            >Delete</button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                }
+              </tbody>
+            </table>
+          </div>
         </div>
       )}
 
@@ -345,7 +464,6 @@ export default function GRNPage() {
                         </select>
                       </td>
                       <td style={{padding:"12px 16px"}}>
-                        {/* Reason with auto-suggest via datalist */}
                         <div style={{position:"relative"}}>
                           <input list={`reasons-${r.id}`} className="ims-input ims-input-sm" style={{width:180}}
                             value={reasons[r.id]||""} placeholder="Type reason…"
