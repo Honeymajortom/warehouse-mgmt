@@ -347,7 +347,7 @@ export default function UserManagementPage({ currentUser }) {
                     )}
                     {/* DELETE BUTTON — Admin only, cannot delete self or other admins */}
                     {isAdmin && u.role !== "admin" && u.id !== currentUser?.id && (
-                      <button onClick={() => setModal({ type: "delete", user: u })} style={{ padding: "5px 10px", borderRadius: 6, border: "none", fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}>🗑 Delete</button>
+                      <button onClick={() => setModal({ type: "delete", user: u })} style={{ padding: "5px 10px", borderRadius: 6, border: "none", fontSize: 11, fontWeight: 700, color: "#fff", background: "var(--danger)", cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
                     )}
                   </div>
                 </td>

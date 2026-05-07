@@ -229,19 +229,27 @@ export default function RegisterPage({ isDark, setIsDark, onRegister, onSwitchMo
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={{ textAlign: "center", marginBottom: 36 }}>
           <div
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              margin: "0 auto 14px",
-              background: "linear-gradient(135deg, var(--accent), var(--accent2))",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 24,
-            }}
+            // style={{
+            //   width: 70,
+            //   height: 70,
+            //   borderRadius: 16,
+            //   margin: "0 auto 14px",
+            //   // background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+            //   display: "flex",
+            //   alignItems: "center",
+            //   justifyContent: "center",
+            //   fontSize: 24,
+            // }}
           >
-            📦
+            <img
+              src="/3APJ.png"
+              alt="Logo"
+              style={{
+                width: "70%",
+                height: "70%",
+                objectFit: "contain",
+              }}
+            />
           </div>
           <h1 style={{ fontSize: 28, fontWeight: 900, margin: 0, color: "var(--text-primary)" }}>Request Access</h1>
           <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>Warehouse Management System</p>

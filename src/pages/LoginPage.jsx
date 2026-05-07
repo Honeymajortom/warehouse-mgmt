@@ -90,23 +90,31 @@ export default function LoginPage({ isDark, setIsDark, onLogin, onSwitchMode }) 
       <div style={{ width: "100%", maxWidth: 420 }}>
         <div style={{ textAlign: "center", marginBottom: 36 }}>
           <div
-            style={{
-              width: 56,
-              height: 56,
-              borderRadius: 16,
-              margin: "0 auto 14px",
-              background: "linear-gradient(135deg, var(--accent), var(--accent2))",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              fontSize: 24,
-              boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
-            }}
+            // style={{
+            //   width: 70,
+            //   height: 70,
+            //   borderRadius: 16,
+            //   margin: "0 auto 14px",
+            //   // background: "linear-gradient(135deg, var(--accent), var(--accent2))",
+            //   display: "flex",
+            //   alignItems: "center",
+            //   justifyContent: "center",
+            //   fontSize: 24,
+            //   boxShadow: "0 8px 24px rgba(0,0,0,0.2)",
+            // }}
           >
-            📦
+            <img
+              src="/3APJ.png"
+              alt="Logo"
+              style={{
+                width: "70%",
+                height: "70%",
+                objectFit: "contain",
+              }}
+            />
           </div>
           <h1 style={{ fontSize: 28, fontWeight: 900, margin: 0, color: "var(--text-primary)", fontFamily: "'Syne',sans-serif" }}>
-            MIDC IMS
+            3APJ WMS
           </h1>
           <p style={{ fontSize: 13, color: "var(--text-secondary)", marginTop: 4 }}>Warehouse Management System</p>
         </div>
@@ -126,7 +134,7 @@ export default function LoginPage({ isDark, setIsDark, onLogin, onSwitchMode }) 
               type="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@midc.com"
+              placeholder="admin@wms.com"
               error={errors.email}
               onKeyDown={(e) => e.key === "Enter" && handleSubmit()}
             />
