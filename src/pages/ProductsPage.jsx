@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import useCrud from "../hooks/useCrud";
 import { getAll } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
@@ -17,6 +17,101 @@ const emptyForm = () => ({
   netWeight:"", batchNumber:"", itemCode:"",
   modelNumber:"", serialNumber:"", ean:"", imei:"",
 });
+
+/* ═══════════════════════════════════════════════════════════════
+   LAZY IMAGE — only loads when visible, avoids base64 bloat
+   ═══════════════════════════════════════════════════════════════ */
+function LazyImage({ src, alt = "", className, style }) {
+  const [visible, setVisible] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const imgRef = useRef();
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "50px" }
+    );
+    if (imgRef.current) observer.observe(imgRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  if (!src) return <span>📦</span>;
+
+  return (
+    <div ref={imgRef} style={{ width: "100%", height: "100%", display: "flex", alignItems: "center", justifyContent: "center", ...style }}>
+      {visible ? (
+        <img
+          src={src}
+          alt={alt}
+          loading="lazy"
+          style={{
+            width: "100%",
+            height: "100%",
+            objectFit: "cover",
+            opacity: loaded ? 1 : 0,
+            transition: "opacity 0.2s",
+          }}
+          onLoad={() => setLoaded(true)}
+          onError={(e) => { e.target.style.display = "none"; e.target.parentElement.innerHTML = "📦"; }}
+        />
+      ) : (
+        <span>📦</span>
+      )}
+    </div>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PAGINATION HOOK — reusable
+   ═══════════════════════════════════════════════════════════════ */
+function usePagination(items, pageSize) {
+  const [page, setPage] = useState(1);
+  const totalPages = Math.ceil(items.length / pageSize);
+  const paginated = useMemo(() => 
+    items.slice((page - 1) * pageSize, page * pageSize),
+    [items, page, pageSize]
+  );
+  const reset = useCallback(() => setPage(1), []);
+  return { page, setPage, totalPages, paginated, reset };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   PAGINATION CONTROLS
+   ═══════════════════════════════════════════════════════════════ */
+function Pagination({ page, totalPages, onChange, totalItems }) {
+  if (totalPages <= 1) return null;
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 16 }}>
+      <button 
+        className="ims-btn ims-btn-ghost" 
+        disabled={page === 1}
+        onClick={() => onChange(p => p - 1)}
+        style={{ opacity: page === 1 ? 0.4 : 1 }}
+      >
+        ← Prev
+      </button>
+      <span style={{ padding: "6px 12px", color: "var(--text-secondary)", fontSize: 13, minWidth: 120, textAlign: "center" }}>
+        Page {page} of {totalPages}
+      </span>
+      <span style={{ color: "var(--text-muted)", fontSize: 11 }}>
+        ({totalItems} total)
+      </span>
+      <button 
+        className="ims-btn ims-btn-ghost" 
+        disabled={page === totalPages}
+        onClick={() => onChange(p => p + 1)}
+        style={{ opacity: page === totalPages ? 0.4 : 1 }}
+      >
+        Next →
+      </button>
+    </div>
+  );
+}
 
 function ImageUploader({ base64, url, onBase64Change, onUrlChange }) {
   const [dragging, setDragging] = useState(false);
@@ -62,7 +157,18 @@ const F=({label,children,required})=>(
 );
 
 export default function ProductsPage() {
-  const {items:products,loading,saving,add,remove,update} = useCrud("products");
+  const { 
+  items: products, 
+  loading, 
+  saving, 
+  totalCount,
+  hasMore,
+  refresh,
+  loadMore,  // NEW
+  add, 
+  remove, 
+  update 
+} = useCrud("products", { pageSize: 50 });
   const [tab,setTab]     = useState("List");
   const [form,setForm]   = useState(emptyForm());
   const [vendors,setVendors]   = useState([]);
@@ -71,10 +177,35 @@ export default function ProductsPage() {
   const [toast,setToast] = useState(null);
   const [search,setSearch] = useState("");
 
+  // Pagination for List tab
+  const listPagination = usePagination(
+    useMemo(() => products.filter(p => 
+      !search || 
+      p.productName?.toLowerCase().includes(search.toLowerCase()) ||
+      p.skuId?.toLowerCase().includes(search.toLowerCase()) ||
+      p.vendorName?.toLowerCase().includes(search.toLowerCase()) ||
+      p.category?.toLowerCase().includes(search.toLowerCase())
+    ), [products, search]),
+    50 // 50 items per page
+  );
+
+  // Pagination for Edit/Delete tab
+  const editPagination = usePagination(products, 20);
+
+  // Reset pagination when search or tab changes
+  useEffect(() => { listPagination.reset(); }, [search]);
+  useEffect(() => { 
+    listPagination.reset(); 
+    editPagination.reset();
+  }, [tab]);
+
   useEffect(()=>{ getAll("vendors").then(setVendors); },[]);
   const f = k => e => setForm(p=>({...p,[k]:e.target.value}));
 
-  const uniqueVendors = [...new Map(vendors.map(v=>[v.vendorName,v])).values()];
+  const uniqueVendors = useMemo(() => 
+    [...new Map(vendors.map(v=>[v.vendorName,v])).values()],
+    [vendors]
+  );
 
   const handleVendorChange = vendorName => {
     const vps = vendors.filter(v=>v.vendorName===vendorName);
@@ -87,7 +218,6 @@ export default function ProductsPage() {
     setForm(p=>({...p,productName,skuId:match?.skuId||""}));
   };
 
-  // When category changes, clear subcategory
   const handleCategoryChange = cat => setForm(p=>({...p,category:cat,subcategory:""}));
 
   const handleAdd = async () => {
@@ -103,7 +233,6 @@ export default function ProductsPage() {
     setEditItem(null); setToast({msg:"Updated",type:"success"});
   };
 
-  const filtered = products.filter(p=>!search||p.productName?.toLowerCase().includes(search.toLowerCase())||p.skuId?.toLowerCase().includes(search.toLowerCase())||p.vendorName?.toLowerCase().includes(search.toLowerCase())||p.category?.toLowerCase().includes(search.toLowerCase()));
   const m = margin(Number(form.buyingPrice),Number(form.sellingPrice));
 
   return (
@@ -117,15 +246,26 @@ export default function ProductsPage() {
       {/* ── List ── */}
       {tab==="List"&&(
         <div style={{display:"flex",flexDirection:"column",gap:12}}>
-          <input className="ims-input" style={{width:320}} placeholder="Search product, SKU, vendor, category…" value={search} onChange={e=>setSearch(e.target.value)}/>
-          <Table loading={loading} cols={["Image","SKU","Product","Category","Subcategory","Brand","Vendor","MRP","Buy","Sell","Margin"]} rows={filtered}
+          <input 
+            className="ims-input" 
+            style={{width:320}} 
+            placeholder="Search product, SKU, vendor, category…" 
+            value={search} 
+            onChange={e=>setSearch(e.target.value)}
+          />
+          <Table 
+            loading={loading} 
+            cols={["Image","SKU","Product","Category","Subcategory","Brand","Vendor","MRP","Buy","Sell","Margin"]} 
+            rows={listPagination.paginated}
             renderRow={r=>{
               const mg=margin(r.buyingPrice,r.sellingPrice);
               const preview=r.imageBase64||r.imageUrl;
               return(<>
-                <Td><div style={{width:38,height:38,borderRadius:8,border:"1px solid var(--border)",overflow:"hidden",background:"var(--bg-elevated)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>
-                  {preview?<img src={preview} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:"📦"}
-                </div></Td>
+                <Td>
+                  <div style={{width:38,height:38,borderRadius:8,border:"1px solid var(--border)",overflow:"hidden",background:"var(--bg-elevated)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16}}>
+                    <LazyImage src={preview} />
+                  </div>
+                </Td>
                 <Td mono><span className="t-accent">{r.skuId}</span></Td>
                 <Td><span style={{fontWeight:600}}>{r.productName}</span></Td>
                 <Td><span className="ims-badge ims-badge-violet">{r.category||"—"}</span></Td>
@@ -138,6 +278,12 @@ export default function ProductsPage() {
                 <Td>{mg!==null&&<span className={`ims-badge ${mg>30?"ims-badge-green":"ims-badge-amber"}`}>{mg}%</span>}</Td>
               </>);
             }}
+          />
+          <Pagination 
+            page={listPagination.page} 
+            totalPages={listPagination.totalPages} 
+            onChange={listPagination.setPage}
+            totalItems={products.length}
           />
         </div>
       )}
@@ -229,13 +375,13 @@ export default function ProductsPage() {
       {/* ── Edit / Delete ── */}
       {tab==="Edit / Delete"&&(
         <div style={{display:"flex",flexDirection:"column",gap:8,maxWidth:720}}>
-          {products.map((p,i)=>{
+          {editPagination.paginated.map((p)=>{  // REMOVED: i index and fade-up animation
             const preview=p.imageBase64||p.imageUrl;
             return(
-              <div key={p.id} className="ims-row-item fade-up" style={{animationDelay:`${i*30}ms`}}>
+              <div key={p.id} className="ims-row-item">
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
                   <div style={{width:38,height:38,borderRadius:8,border:"1px solid var(--border)",overflow:"hidden",background:"var(--bg-elevated)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,fontSize:16}}>
-                    {preview?<img src={preview} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}} onError={e=>e.target.style.display="none"}/>:"📦"}
+                    <LazyImage src={preview} />
                   </div>
                   <div>
                     <p className="t-primary" style={{margin:0,fontSize:14,fontWeight:600}}>{p.productName}</p>
@@ -249,6 +395,12 @@ export default function ProductsPage() {
               </div>
             );
           })}
+          <Pagination 
+            page={editPagination.page} 
+            totalPages={editPagination.totalPages} 
+            onChange={editPagination.setPage}
+            totalItems={products.length}
+          />
         </div>
       )}
 
@@ -300,6 +452,19 @@ export default function ProductsPage() {
           </div>
         </Modal>
       )}
+
+      {/* Footer Credit */}
+      <div style={{
+        textAlign: "center",
+        padding: "16px 0",
+        fontSize: "14px",
+        color: "var(--text-primary)",
+        borderTop: "1px solid var(--border)",
+        marginTop: "30px",
+        opacity: 0.8
+      }}>
+        © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
+      </div>
     </div>
   );
 }

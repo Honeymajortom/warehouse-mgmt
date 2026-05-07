@@ -340,7 +340,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
                     <td>{r.qty}</td>
                     <td style={{display:"flex",gap:8,padding:"12px 16px"}}>
                       <Button variant="danger" onClick={()=>handleRTO(r)}>RTO</Button>
-                      <Button variant="amber"  onClick={()=>handleRPV(r)}>RPV</Button>
+                      <Button variant="amber"  onClick={()=>handleRPV(r)}>RTV</Button>
                     </td>
                   </tr>
                 ))
@@ -567,6 +567,18 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
           </>)}
         />
       )}
+      {/* Footer Credit */}
+  <div style={{
+    textAlign: "center",
+    padding: "16px 0",
+    fontSize: "14px",
+    color: "var(--text-primary)",
+    borderTop: "1px solid var(--border)",
+    marginTop: "30px",
+    opacity: 0.8
+  }}>
+    © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
+  </div>
     </div>
   );
 }

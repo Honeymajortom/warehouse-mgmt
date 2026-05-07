@@ -485,6 +485,18 @@ export default function GRNPage() {
           </div>
         </div>
       )}
+      {/* Footer Credit */}
+  <div style={{
+    textAlign: "center",
+    padding: "16px 0",
+    fontSize: "14px",
+    color: "var(--text-primary)",
+    borderTop: "1px solid var(--border)",
+    marginTop: "30px",
+    opacity: 0.8
+  }}>
+    © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
+  </div>
     </div>
   );
 }
