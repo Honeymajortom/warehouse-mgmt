@@ -69,26 +69,51 @@ export default function PurchasePage() {
   const [draftPO, setDraftPO] = useState(null);
   const [expandedPO, setExpandedPO] = useState(null);
   const barcodeRefs = useRef({});
+  const isLoadingRef = useRef(false); // ← guard against duplicate loads
 
   const load = async () => {
+    if (isLoadingRef.current) return; // ← prevent duplicate concurrent loads
+    isLoadingRef.current = true;
     setLoading(true);
+    try {
+      const [purchasesData, vendorsData, productsData] = await Promise.all([
+        getAll("purchases"),
+        getAll("vendors"),
+        getAll("products")
+      ]);
 
-    const [purchasesData, vendorsData, productsData] = await Promise.all([
-      getAll("purchases"),
-      getAll("vendors"),
-      getAll("products")
-    ]);
+      console.log("[PurchasePage] Loaded:", {
+        purchases: purchasesData.length,
+        vendors: vendorsData.length,
+        products: productsData.length,
+        sampleVendor: vendorsData[0],
+        sampleProduct: productsData[0]
+      });
 
-    setPurchases(purchasesData);
-    setVendors(vendorsData);
-    setProducts(productsData);
-
-    setLoading(false);
+      setPurchases(purchasesData);
+      setVendors(vendorsData);
+      setProducts(productsData);
+    } catch (err) {
+      console.error("[PurchasePage] Load failed:", err);
+      setToast({ msg: "Failed to load data: " + err.message, type: "error" });
+    } finally {
+      setLoading(false);
+      isLoadingRef.current = false;
+    }
   };
+
   useEffect(() => { load(); }, []);
 
   const grouped = groupByPO(purchases);
   const uniqueVendors = [...new Map(vendors.map(v => [v.vendorName, v])).values()];
+
+  // ── OPTIONAL: filter products by selected vendor ──
+  // Set filterByVendor = true if you want the product dropdown to only show
+  // products belonging to the selected vendor.
+  const filterByVendor = true;
+  const availableProducts = filterByVendor && draftPO?.vendorName
+    ? products.filter(p => p.vendorName === draftPO.vendorName)
+    : products;
 
   const handleNewPO = () => {
     setDraftPO({ poNumber: genPoNumber(), purchaseDate: new Date().toISOString().split("T")[0], vendorName: "", vendorInfo: emptyVendor, rows: [emptyRow()] });
@@ -99,7 +124,6 @@ export default function PurchasePage() {
     const v = vendors.find(v => v.vendorName === vendorName) || {};
     setDraftPO(d => ({ ...d, vendorName, vendorInfo: { vendorName, contact: v.contact || "", email: v.email || "", gstNo: v.gstNo || "", address: v.address || "" } }));
   };
-
 
   const updateRow = (id, key, val) => {
     setDraftPO(d => ({
@@ -112,45 +136,19 @@ export default function PurchasePage() {
     }));
   };
 
-  // ── FIX: auto-populate costPerHead from product's buyingPrice ──
-  // const selectProduct = (id, name) => {
-  //   const p = vendors.find(v=>v.vendorName===draftPO.vendorName && v.productName===name);
-  //   // Resolve buying price — try multiple field names for safety
-  //   const buying = p?.buyingPrice != null && p.buyingPrice !== ""
-  //     ? String(p.buyingPrice)
-  //     : p?.costPrice != null && p.costPrice !== ""
-  //       ? String(p.costPrice)
-  //       : p?.mrp != null && p.mrp !== ""
-  //         ? String(p.mrp)
-  //         : "";
-  //   setDraftPO(d=>({...d, rows:d.rows.map(r=>{
-  //     if (r._id!==id) return r;
-  //     const total = r.units && buying
-  //       ? String(Math.round(Number(r.units)*Number(buying)*100)/100)
-  //       : "";
-  //     return { ...r, productName:name, skuId:p?.skuId||"", costPerHead:buying, totalCost:total };
-  //   })}));
-  // };
   const selectProduct = (id, name) => {
     const p = products.find(prod => prod.productName === name);
-
     if (!p) return;
 
-    const buying =
-      p.buyingPrice ?? p.costPrice ?? p.mrp ?? "";
+    const buying = p.buyingPrice ?? p.costPrice ?? p.mrp ?? "";
 
     setDraftPO(d => ({
       ...d,
       rows: d.rows.map(r => {
         if (r._id !== id) return r;
-
-        const total =
-          r.units && buying
-            ? String(
-              Math.round(Number(r.units) * Number(buying) * 100) / 100
-            )
-            : "";
-
+        const total = r.units && buying
+          ? String(Math.round(Number(r.units) * Number(buying) * 100) / 100)
+          : "";
         return {
           ...r,
           productName: name,
@@ -170,27 +168,83 @@ export default function PurchasePage() {
     if (!valid.length) return setToast({ msg: "Add at least one product", type: "error" });
     if (!draftPO.vendorName) return setToast({ msg: "Select a vendor first", type: "error" });
     setSaving(true);
-    const audit = getAuditFields();
-    for (const r of valid) {
-      await addItem("purchases", { poNumber: draftPO.poNumber, purchaseDate: draftPO.purchaseDate, vendorName: draftPO.vendorName, vendorContact: draftPO.vendorInfo?.contact || "", vendorGst: draftPO.vendorInfo?.gstNo || "", productName: r.productName, skuId: r.skuId, units: Number(r.units || 0), costPerHead: Number(r.costPerHead || 0), totalCost: Number(r.totalCost || 0), status: "ACTIVE", ...audit });
+    try {
+      const audit = getAuditFields();
+      for (const r of valid) {
+        await addItem("purchases", {
+          poNumber: draftPO.poNumber,
+          purchaseDate: draftPO.purchaseDate,
+          vendorName: draftPO.vendorName,
+          vendorContact: draftPO.vendorInfo?.contact || "",
+          vendorGst: draftPO.vendorInfo?.gstNo || "",
+          productName: r.productName,
+          skuId: r.skuId,
+          units: Number(r.units || 0),
+          costPerHead: Number(r.costPerHead || 0),
+          totalCost: Number(r.totalCost || 0),
+          status: "ACTIVE",
+          ...audit
+        });
+      }
+      const grandTotal = valid.reduce((s, r) => s + Number(r.totalCost || 0), 0);
+      setToast({ msg: `PO ${draftPO.poNumber} saved — ${valid.length} product(s) · ₹${grandTotal.toLocaleString()}`, type: "success" });
+      await load();
+      setExpandedPO(draftPO.poNumber);
+      setDraftPO(null);
+      setTab("PO List");
+    } catch (err) {
+      console.error("[PurchasePage] Save failed:", err);
+      setToast({ msg: "Failed to save PO: " + err.message, type: "error" });
+    } finally {
+      setSaving(false);
     }
-    const grandTotal = valid.reduce((s, r) => s + Number(r.totalCost || 0), 0);
-    setToast({ msg: `PO ${draftPO.poNumber} saved — ${valid.length} product(s) · ₹${grandTotal.toLocaleString()}`, type: "success" });
-    setSaving(false); await load(); setExpandedPO(draftPO.poNumber); setDraftPO(null); setTab("PO List");
   };
 
   const handleEndPO = async () => {
     if (!draftPO) return;
-    const audit = getAuditFields();
-    const existing = purchases.filter(p => p.poNumber === draftPO.poNumber);
-    for (const p of existing) await updateItem("purchases", p.id, { status: "COMPLETED", ...audit });
-    setToast({ msg: `PO ${draftPO.poNumber} completed & locked`, type: "success" });
-    setDraftPO(null); await load(); setTab("PO List");
+    try {
+      const audit = getAuditFields();
+      const existing = purchases.filter(p => p.poNumber === draftPO.poNumber);
+      for (const p of existing) await updateItem("purchases", p.id, { status: "COMPLETED", ...audit });
+      setToast({ msg: `PO ${draftPO.poNumber} completed & locked`, type: "success" });
+      setDraftPO(null);
+      await load();
+      setTab("PO List");
+    } catch (err) {
+      console.error("[PurchasePage] End PO failed:", err);
+      setToast({ msg: "Failed to complete PO: " + err.message, type: "error" });
+    }
   };
 
-  const lockPO = async poNumber => { const audit = getAuditFields(); const items = purchases.filter(p => p.poNumber === poNumber); for (const p of items) await updateItem("purchases", p.id, { status: "COMPLETED", ...audit }); setToast({ msg: `PO ${poNumber} locked`, type: "success" }); load(); };
-  const deletePO = async poNumber => { const items = purchases.filter(p => p.poNumber === poNumber); for (const p of items) await deleteItem("purchases", p.id); setToast({ msg: `PO ${poNumber} deleted`, type: "success" }); load(); };
-  const getBarcodeRef = pn => { if (!barcodeRefs.current[pn]) barcodeRefs.current[pn] = { current: null }; return barcodeRefs.current[pn]; };
+  const lockPO = async poNumber => {
+    try {
+      const audit = getAuditFields();
+      const items = purchases.filter(p => p.poNumber === poNumber);
+      for (const p of items) await updateItem("purchases", p.id, { status: "COMPLETED", ...audit });
+      setToast({ msg: `PO ${poNumber} locked`, type: "success" });
+      load();
+    } catch (err) {
+      console.error("[PurchasePage] Lock PO failed:", err);
+      setToast({ msg: "Failed to lock PO: " + err.message, type: "error" });
+    }
+  };
+
+  const deletePO = async poNumber => {
+    try {
+      const items = purchases.filter(p => p.poNumber === poNumber);
+      for (const p of items) await deleteItem("purchases", p.id);
+      setToast({ msg: `PO ${poNumber} deleted`, type: "success" });
+      load();
+    } catch (err) {
+      console.error("[PurchasePage] Delete PO failed:", err);
+      setToast({ msg: "Failed to delete PO: " + err.message, type: "error" });
+    }
+  };
+
+  const getBarcodeRef = pn => {
+    if (!barcodeRefs.current[pn]) barcodeRefs.current[pn] = { current: null };
+    return barcodeRefs.current[pn];
+  };
 
   return (
     <div>
@@ -200,7 +254,7 @@ export default function PurchasePage() {
       </SectionHeader>
       <div className="ims-tab-bar">
         {["PO List", "Add Purchase"].map(t => (
-          <button key={t} className={`ims-tab${tab === t ? " active" : ""}`} onClick={() => { if (t === "Add Purchase" && !draftPO) return handleNewPO(); setTab(t); }}>{t}</button>
+          <button key={`tab-${t}`} className={`ims-tab${tab === t ? " active" : ""}`} onClick={() => { if (t === "Add Purchase" && !draftPO) return handleNewPO(); setTab(t); }}>{t}</button>
         ))}
       </div>
 
@@ -208,66 +262,87 @@ export default function PurchasePage() {
       {tab === "PO List" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           <Button variant="ghost" onClick={load} style={{ width: "fit-content" }}>↻ Refresh</Button>
-          {loading ? <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 64 }}><div className="spin" style={{ width: 24, height: 24, border: "2px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%" }} /></div>
-            : grouped.length === 0 ? <div className="ims-panel" style={{ textAlign: "center" }}><p className="t-muted" style={{ marginBottom: 16 }}>No POs yet</p><Button onClick={handleNewPO}>+ Create First PO</Button></div>
-              : grouped.map(po => {
-                const grandTotal = po.items.reduce((s, r) => s + Number(r.totalCost || 0), 0);
-                const isExpanded = expandedPO === po.poNumber;
-                const bRef = getBarcodeRef(po.poNumber);
-                return (
-                  <div key={po.poNumber} className="ims-card" style={{ overflow: "hidden" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", cursor: "pointer", borderBottom: isExpanded ? "1px solid var(--border)" : "none" }} onClick={() => setExpandedPO(isExpanded ? null : po.poNumber)}>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                          <span className="t-accent" style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800 }}>{po.poNumber}</span>
-                          <Badge color={po.status === "COMPLETED" ? "green" : "cyan"}>{po.status}</Badge>
-                          <span className="t-muted" style={{ fontSize: 12 }}>· {po.vendorName || "—"} · {po.items.length} product(s) · {po.date ? new Date(po.date).toLocaleDateString() : "—"}</span>
-                        </div>
-                        <div className="t-warning" style={{ fontSize: 15, fontWeight: 800, marginTop: 4 }}>Grand Total: ₹{grandTotal.toLocaleString()}</div>
+          {loading ? (
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", padding: 64 }}>
+              <div className="spin" style={{ width: 24, height: 24, border: "2px solid var(--border)", borderTopColor: "var(--accent)", borderRadius: "50%" }} />
+            </div>
+          ) : grouped.length === 0 ? (
+            <div className="ims-panel" style={{ textAlign: "center" }}>
+              <p className="t-muted" style={{ marginBottom: 16 }}>No POs yet</p>
+              <Button onClick={handleNewPO}>+ Create First PO</Button>
+            </div>
+          ) : (
+            grouped.map(po => {
+              const grandTotal = po.items.reduce((s, r) => s + Number(r.totalCost || 0), 0);
+              const isExpanded = expandedPO === po.poNumber;
+              const bRef = getBarcodeRef(po.poNumber);
+              return (
+                <div key={`po-card-${po.poNumber}`} className="ims-card" style={{ overflow: "hidden" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 16, padding: "16px 20px", cursor: "pointer", borderBottom: isExpanded ? "1px solid var(--border)" : "none" }} onClick={() => setExpandedPO(isExpanded ? null : po.poNumber)}>
+                    <div style={{ flex: 1 }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                        <span className="t-accent" style={{ fontFamily: "monospace", fontSize: 14, fontWeight: 800 }}>{po.poNumber}</span>
+                        <Badge color={po.status === "COMPLETED" ? "green" : "cyan"}>{po.status}</Badge>
+                        <span className="t-muted" style={{ fontSize: 12 }}>· {po.vendorName || "—"} · {po.items.length} product(s) · {po.date ? new Date(po.date).toLocaleDateString() : "—"}</span>
                       </div>
-                      <div style={{ display: "flex", gap: 8 }} onClick={e => e.stopPropagation()}>
-                        {po.status !== "COMPLETED" && <Button variant="amber" onClick={() => lockPO(po.poNumber)}>🔒 End PO</Button>}
-                        <Button variant="ghost" onClick={() => { setTimeout(() => printPO(po, getBarcodeRef(po.poNumber).current), 200); setExpandedPO(po.poNumber); }}>🖨 PDF</Button>
-                        {po.status !== "COMPLETED" && <Button variant="danger" onClick={() => deletePO(po.poNumber)}>Delete</Button>}
-                      </div>
-                      <span className="t-muted" style={{ fontSize: 18, marginLeft: 4 }}>{isExpanded ? "▲" : "▼"}</span>
+                      <div className="t-warning" style={{ fontSize: 15, fontWeight: 800, marginTop: 4 }}>Grand Total: ₹{grandTotal.toLocaleString()}</div>
                     </div>
-                    {isExpanded && (
-                      <div style={{ padding: "0 20px 20px" }}>
-                        <div style={{ height: 0, overflow: "hidden" }}><BarcodeSvg value={po.poNumber} svgRef={bRef} /></div>
-                        <table className="ims-table" style={{ marginTop: 16 }}>
-                          <thead><tr>{["#", "Product", "SKU", "Qty", "Cost/Unit", "Total"].map(c => <th key={c}>{c}</th>)}</tr></thead>
-                          <tbody>
-                            {po.items.map((r, i) => (
-                              <tr key={r.id || i}>
-                                <td className="t-muted" style={{ padding: "10px 16px", fontSize: 12 }}>{i + 1}</td>
-                                <td style={{ padding: "10px 16px", fontWeight: 600 }}>{r.productName}</td>
-                                <td className="mono" style={{ padding: "10px 16px" }}>{r.skuId}</td>
-                                <td style={{ padding: "10px 16px" }}>{r.units}</td>
-                                <td style={{ padding: "10px 16px" }}>₹{Number(r.costPerHead).toLocaleString()}</td>
-                                <td style={{ padding: "10px 16px", fontWeight: 700 }} className="t-warning">₹{Number(r.totalCost).toLocaleString()}</td>
-                              </tr>
-                            ))}
-                            <tr style={{ borderTop: "2px solid var(--border)" }}>
-                              <td colSpan={5} style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700 }} className="t-primary">Grand Total</td>
-                              <td style={{ padding: "12px 16px", fontWeight: 900, fontSize: 16 }} className="t-success">₹{grandTotal.toLocaleString()}</td>
-                            </tr>
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
+                    <div style={{ display: "flex", gap: 8 }} onClick={e => e.stopPropagation()}>
+                      {po.status !== "COMPLETED" && <Button variant="amber" onClick={() => lockPO(po.poNumber)}>🔒 End PO</Button>}
+                      <Button variant="ghost" onClick={() => { setTimeout(() => printPO(po, getBarcodeRef(po.poNumber).current), 200); setExpandedPO(po.poNumber); }}>🖨 PDF</Button>
+                      {po.status !== "COMPLETED" && <Button variant="danger" onClick={() => deletePO(po.poNumber)}>Delete</Button>}
+                    </div>
+                    <span className="t-muted" style={{ fontSize: 18, marginLeft: 4 }}>{isExpanded ? "▲" : "▼"}</span>
                   </div>
-                );
-              })
-          }
+                  {isExpanded && (
+                    <div style={{ padding: "0 20px 20px" }}>
+                      <div style={{ height: 0, overflow: "hidden" }}>
+                        <BarcodeSvg value={po.poNumber} svgRef={bRef} />
+                      </div>
+                      <table className="ims-table" style={{ marginTop: 16 }}>
+                        <thead>
+                          <tr>
+                            {["#", "Product", "SKU", "Qty", "Cost/Unit", "Total"].map((c, idx) => (
+                              <th key={`th-${po.poNumber}-${c}-${idx}`}>{c}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {po.items.map((r, i) => (
+                            <tr key={`${po.poNumber}-item-${r.id || i}`}>
+                              <td className="t-muted" style={{ padding: "10px 16px", fontSize: 12 }}>{i + 1}</td>
+                              <td style={{ padding: "10px 16px", fontWeight: 600 }}>{r.productName}</td>
+                              <td className="mono" style={{ padding: "10px 16px" }}>{r.skuId}</td>
+                              <td style={{ padding: "10px 16px" }}>{r.units}</td>
+                              <td style={{ padding: "10px 16px" }}>₹{Number(r.costPerHead).toLocaleString()}</td>
+                              <td style={{ padding: "10px 16px", fontWeight: 700 }} className="t-warning">₹{Number(r.totalCost).toLocaleString()}</td>
+                            </tr>
+                          ))}
+                          <tr key={`${po.poNumber}-total`} style={{ borderTop: "2px solid var(--border)" }}>
+                            <td colSpan={5} style={{ padding: "12px 16px", textAlign: "right", fontWeight: 700 }} className="t-primary">Grand Total</td>
+                            <td style={{ padding: "12px 16px", fontWeight: 900, fontSize: 16 }} className="t-success">₹{grandTotal.toLocaleString()}</td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
         </div>
       )}
 
       {/* ── Add Purchase ── */}
       {tab === "Add Purchase" && (
         <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
-          {!draftPO ? <div className="ims-panel" style={{ textAlign: "center" }}><p className="t-muted" style={{ marginBottom: 16 }}>No active PO.</p><Button onClick={handleNewPO}>+ New PO</Button></div>
-            : <>
+          {!draftPO ? (
+            <div className="ims-panel" style={{ textAlign: "center" }}>
+              <p className="t-muted" style={{ marginBottom: 16 }}>No active PO.</p>
+              <Button onClick={handleNewPO}>+ New PO</Button>
+            </div>
+          ) : (
+            <>
               {/* PO Header */}
               <div className="ims-panel">
                 <p className="ims-section-title">PO Details</p>
@@ -284,7 +359,11 @@ export default function PurchasePage() {
                     <label className="ims-label">Vendor *</label>
                     <select className="ims-input" value={draftPO.vendorName} onChange={e => handleVendorSelect(e.target.value)}>
                       <option value="">Select vendor…</option>
-                      {uniqueVendors.map(v => <option key={v.id} value={v.vendorName}>{v.vendorName}</option>)}
+                      {uniqueVendors.map(v => (
+                        <option key={`vendor-opt-${v.id || v.vendorName}`} value={v.vendorName}>
+                          {v.vendorName}
+                        </option>
+                      ))}
                     </select>
                   </div>
                 </div>
@@ -293,7 +372,10 @@ export default function PurchasePage() {
                     <p className="t-success" style={{ margin: "0 0 6px", fontSize: 11, fontWeight: 700 }}>✓ VENDOR SELECTED</p>
                     <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 1fr", gap: 10 }}>
                       {[["Contact", draftPO.vendorInfo?.contact], ["GST", draftPO.vendorInfo?.gstNo], ["Address", draftPO.vendorInfo?.address]].map(([l, v]) => (
-                        <div key={l}><p className="t-muted" style={{ margin: 0, fontSize: 11 }}>{l}</p><p className="t-primary" style={{ margin: "2px 0 0", fontSize: 12, fontWeight: 600 }}>{v || "—"}</p></div>
+                        <div key={`vendor-meta-${l}`}>
+                          <p className="t-muted" style={{ margin: 0, fontSize: 11 }}>{l}</p>
+                          <p className="t-primary" style={{ margin: "2px 0 0", fontSize: 12, fontWeight: 600 }}>{v || "—"}</p>
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -308,10 +390,14 @@ export default function PurchasePage() {
               ) : (
                 <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
                   {draftPO.rows.map((row, idx) => (
-                    <div key={row._id} className="ims-panel" style={{ position: "relative" }}>
+                    <div key={`product-row-${row._id}`} className="ims-panel" style={{ position: "relative" }}>
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                         <span className="ims-section-title" style={{ margin: 0 }}>Product {idx + 1}</span>
-                        {draftPO.rows.length > 1 && <button onClick={() => removeRow(row._id)} className="ims-btn ims-btn-ghost" style={{ padding: "3px 10px", fontSize: 12, color: "var(--danger-text)" }}>✕ Remove</button>}
+                        {draftPO.rows.length > 1 && (
+                          <button onClick={() => removeRow(row._id)} className="ims-btn ims-btn-ghost" style={{ padding: "3px 10px", fontSize: 12, color: "var(--danger-text)" }}>
+                            ✕ Remove
+                          </button>
+                        )}
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
                         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
@@ -322,9 +408,8 @@ export default function PurchasePage() {
                             onChange={(e) => selectProduct(row._id, e.target.value)}
                           >
                             <option value="">Select product…</option>
-
-                            {products.map((p) => (
-                              <option key={p.id} value={p.productName}>
+                            {availableProducts.map((p) => (
+                              <option key={`product-opt-${p.id || p.skuId || p.productName}`} value={p.productName}>
                                 {p.productName}
                               </option>
                             ))}
@@ -338,7 +423,6 @@ export default function PurchasePage() {
                           <label className="ims-label">Quantity</label>
                           <input type="number" className="ims-input" value={row.units} onChange={e => updateRow(row._id, "units", e.target.value)} placeholder="0" />
                         </div>
-                        {/* ── FIX: editable cost field, pre-filled from buyingPrice ── */}
                         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                           <label className="ims-label" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                             Cost / Unit ₹
@@ -355,10 +439,11 @@ export default function PurchasePage() {
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                           <label className="ims-label">Total ₹</label>
-                          <div className="t-warning" style={{ fontWeight: 800, fontSize: 15, padding: "9px 0" }}>{row.totalCost ? `₹${Number(row.totalCost).toLocaleString()}` : "—"}</div>
+                          <div className="t-warning" style={{ fontWeight: 800, fontSize: 15, padding: "9px 0" }}>
+                            {row.totalCost ? `₹${Number(row.totalCost).toLocaleString()}` : "—"}
+                          </div>
                         </div>
                       </div>
-                      {/* Warn if product selected but no buying price found */}
                       {row.productName && !row.costPerHead && (
                         <p className="t-warning" style={{ margin: "8px 0 0", fontSize: 11 }}>
                           ⚠ No buying price found for this product — enter manually
@@ -381,21 +466,22 @@ export default function PurchasePage() {
                 </div>
               )}
             </>
-          }
+          )}
         </div>
       )}
+
       {/* Footer Credit */}
-  <div style={{
-    textAlign: "center",
-    padding: "16px 0",
-    fontSize: "14px",
-    color: "var(--text-primary)",
-    borderTop: "1px solid var(--border)",
-    marginTop: "30px",
-    opacity: 0.8
-  }}>
-    © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
-  </div>
+      <div style={{
+        textAlign: "center",
+        padding: "16px 0",
+        fontSize: "14px",
+        color: "var(--text-primary)",
+        borderTop: "1px solid var(--border)",
+        marginTop: "30px",
+        opacity: 0.8
+      }}>
+        © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
+      </div>
     </div>
   );
 }

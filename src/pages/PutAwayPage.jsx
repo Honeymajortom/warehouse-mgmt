@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { getAll, searchByField, updateItem, addItem, deleteItem, genTxnId } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
@@ -18,18 +18,22 @@ export default function PutAwayPage() {
   const [shownLocs, setShownLocs] = useState({});
   const [toast, setToast] = useState(null);
 
-  //scan location state
+  // ── Scanner state ───────────────────────────────────────────
   const videoRef = useRef(null);
   const [scannerOpen, setScannerOpen] = useState(false);
   const [activeRowId, setActiveRowId] = useState(null);
-  const codeReaderRef = useRef(null);
+  const [scanError, setScanError] = useState(null);
+  const [torchOn, setTorchOn] = useState(false);
+  const [manualInput, setManualInput] = useState("");
+  const controlsRef = useRef(null);
+  const readerRef = useRef(null);
 
   // Inventory Mapping state
   const [zoneMap, setZoneMap] = useState({});
   const [mappingSaving, setMappingSaving] = useState(false);
 
   // ── Put-Away Queue: Edit state ────────────────────────────
-  const [editQueue, setEditQueue] = useState(null);  // record being edited
+  const [editQueue, setEditQueue] = useState(null);
   const [editQueueForm, setEditQueueForm] = useState({});
   const [editQueueSaving, setEditQueueSaving] = useState(false);
 
@@ -53,56 +57,117 @@ export default function PutAwayPage() {
   };
   useEffect(() => { load(); }, []);
 
-  const openScanner = async (rowId) => {
-    setActiveRowId(rowId);
-    setScannerOpen(true);
+  // ── Scanner: initialize AFTER modal renders ────────────────
+  useEffect(() => {
+    if (!scannerOpen || !videoRef.current) return;
 
+    let cancelled = false;
     const reader = new BrowserMultiFormatReader();
-    codeReaderRef.current = reader;
+    readerRef.current = reader;
 
-    try {
-      await reader.decodeFromConstraints(
-        {
+    const start = async () => {
+      try {
+        setScanError(null);
+        setManualInput("");
+
+        const constraints = {
           video: {
-            facingMode: "environment"
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1280 },
+            height: { ideal: 720 },
+          },
+        };
+
+        const controls = await reader.decodeFromConstraints(
+          constraints,
+          videoRef.current,
+          (result, err) => {
+            if (cancelled) return;
+            if (result) {
+              const text = result.getText();
+              setScanLocs(prev => ({ ...prev, [activeRowId]: text }));
+              setToast({ msg: `Scanned: ${text}`, type: "success" });
+              closeScanner();
+            }
+            if (err && err.name !== "NotFoundException") {
+              console.warn("Scan error:", err.message);
+            }
           }
-        },
-        videoRef.current,
-        (result, err) => {
-          if (result) {
-            const scannedText = result.getText();
+        );
 
-            setScanLocs(prev => ({
-              ...prev,
-              [rowId]: scannedText
-            }));
-
-            reader.reset();
-            setScannerOpen(false);
-
-            setToast({
-              msg: `Location scanned: ${scannedText}`,
-              type: "success"
-            });
-          }
+        controlsRef.current = controls;
+      } catch (err) {
+        console.error("Camera failed:", err);
+        if (!cancelled) {
+          setScanError(err.message || "Could not access camera. Ensure permissions are granted.");
         }
-      );
-    } catch (e) {
-      console.error(e);
+      }
+    };
 
-      setToast({
-        msg: "Camera access failed",
-        type: "error"
-      });
+    start();
+
+    return () => {
+      cancelled = true;
+      reader.reset();
+      if (controlsRef.current) {
+        controlsRef.current.stop();
+        controlsRef.current = null;
+      }
+      readerRef.current = null;
+    };
+  }, [scannerOpen, activeRowId]);
+
+  // Close on Escape
+  useEffect(() => {
+    if (!scannerOpen) return;
+    const onKey = (e) => { if (e.key === "Escape") closeScanner(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [scannerOpen]);
+
+  const openScanner = (rowId) => {
+    setActiveRowId(rowId);
+    setScanError(null);
+    setManualInput("");
+    setTorchOn(false);
+    setScannerOpen(true);
+  };
+
+  const closeScanner = useCallback(() => {
+    setScannerOpen(false);
+    setActiveRowId(null);
+    setScanError(null);
+    setManualInput("");
+    setTorchOn(false);
+    if (controlsRef.current) {
+      controlsRef.current.stop();
+      controlsRef.current = null;
+    }
+    if (readerRef.current) {
+      readerRef.current.reset();
+      readerRef.current = null;
+    }
+  }, []);
+
+  const toggleTorch = async () => {
+    const track = videoRef.current?.srcObject?.getVideoTracks?.()[0];
+    if (!track?.getCapabilities?.().torch) {
+      setToast({ msg: "Torch not supported on this device", type: "error" });
+      return;
+    }
+    try {
+      await track.applyConstraints({ advanced: [{ torch: !torchOn }] });
+      setTorchOn(!torchOn);
+    } catch (err) {
+      setToast({ msg: "Failed to toggle torch", type: "error" });
     }
   };
 
-  const closeScanner = () => {
-    if (codeReaderRef.current) {
-      codeReaderRef.current.reset();
-    }
-
-    setScannerOpen(false);
+  const submitManual = () => {
+    if (!manualInput.trim() || !activeRowId) return;
+    setScanLocs(prev => ({ ...prev, [activeRowId]: manualInput.trim() }));
+    setToast({ msg: `Location set: ${manualInput.trim()}`, type: "success" });
+    closeScanner();
   };
 
   const filtered = queue.filter(r =>
@@ -244,6 +309,7 @@ export default function PutAwayPage() {
 
   const actionBtnBase = { fontSize: 11, padding: "4px 10px", borderRadius: 6, fontWeight: 700, cursor: "pointer", border: "none" };
 
+  // ── Scanner Modal ─────────────────────────────────────────
   const ScannerModal = () => {
     if (!scannerOpen) return null;
 
@@ -252,48 +318,202 @@ export default function PutAwayPage() {
         style={{
           position: "fixed",
           inset: 0,
-          background: "rgba(0,0,0,0.75)",
+          background: "rgba(0,0,0,0.85)",
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          zIndex: 2000
+          zIndex: 2000,
+          padding: 20,
+        }}
+        onClick={(e) => {
+          if (e.target === e.currentTarget) closeScanner();
         }}
       >
         <div
           className="ims-card"
           style={{
-            padding: 20,
-            width: "min(420px, 95vw)"
+            padding: 0,
+            width: "min(480px, 95vw)",
+            overflow: "hidden",
+            position: "relative",
           }}
         >
-          <p
-            className="ims-section-title"
-            style={{ marginBottom: 12 }}
-          >
-            Scan Rack Location
-          </p>
-
-          <video
-            ref={videoRef}
-            style={{
-              width: "100%",
-              aspectRatio: "3/4",
-              objectFit: "cover",
-              borderRadius: 12,
-              background: "#000"
-            }}
-          />
-
+          {/* Header */}
           <div
             style={{
+              padding: "16px 20px",
+              borderBottom: "1px solid var(--border)",
               display: "flex",
-              justifyContent: "flex-end",
-              marginTop: 14
+              alignItems: "center",
+              justifyContent: "space-between",
             }}
           >
-            <Button variant="ghost" onClick={closeScanner}>
-              Close
-            </Button>
+            <p className="ims-section-title" style={{ margin: 0 }}>
+              📷 Scan Rack Location
+            </p>
+            <button
+              onClick={closeScanner}
+              style={{
+                background: "none",
+                border: "none",
+                color: "var(--text-muted)",
+                fontSize: 20,
+                cursor: "pointer",
+                padding: 4,
+              }}
+            >
+              ✕
+            </button>
+          </div>
+
+          {/* Video / Error / Manual */}
+          <div style={{ position: "relative", background: "#000", minHeight: 280 }}>
+            {!scanError ? (
+              <>
+                <video
+                  ref={videoRef}
+                  playsInline
+                  muted
+                  style={{
+                    width: "100%",
+                    aspectRatio: "4/3",
+                    objectFit: "cover",
+                    display: "block",
+                  }}
+                />
+                {/* Scan frame overlay */}
+                <div
+                  style={{
+                    position: "absolute",
+                    inset: 0,
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <div
+                    style={{
+                      width: 220,
+                      height: 140,
+                      border: "2px solid rgba(255,255,255,0.5)",
+                      borderRadius: 12,
+                      boxShadow: "0 0 0 9999px rgba(0,0,0,0.4)",
+                    }}
+                  />
+                  <div
+                    style={{
+                      position: "absolute",
+                      bottom: 20,
+                      color: "#fff",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      textShadow: "0 1px 4px rgba(0,0,0,0.8)",
+                      background: "rgba(0,0,0,0.5)",
+                      padding: "6px 14px",
+                      borderRadius: 20,
+                    }}
+                  >
+                    Point camera at barcode
+                  </div>
+                </div>
+              </>
+            ) : (
+              /* Error + Manual fallback */
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  gap: 16,
+                  padding: 32,
+                  background: "var(--bg-elevated)",
+                  minHeight: 280,
+                }}
+              >
+                <div style={{ fontSize: 40 }}>📷❌</div>
+                <p
+                  style={{
+                    color: "var(--danger-text)",
+                    fontSize: 14,
+                    fontWeight: 600,
+                    textAlign: "center",
+                    margin: 0,
+                  }}
+                >
+                  Camera Error
+                </p>
+                <p
+                  style={{
+                    color: "var(--text-secondary)",
+                    fontSize: 13,
+                    textAlign: "center",
+                    margin: 0,
+                    lineHeight: 1.5,
+                    maxWidth: 320,
+                  }}
+                >
+                  {scanError}
+                </p>
+                <div style={{ width: "100%", maxWidth: 280, display: "flex", flexDirection: "column", gap: 10 }}>
+                  <input
+                    className="ims-input"
+                    placeholder="Type location manually..."
+                    value={manualInput}
+                    onChange={(e) => setManualInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") submitManual(); }}
+                    autoFocus
+                  />
+                  <button
+                    className="ims-btn ims-btn-primary"
+                    onClick={submitManual}
+                    disabled={!manualInput.trim()}
+                  >
+                    Set Location
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Footer controls */}
+          <div
+            style={{
+              padding: "12px 20px",
+              background: "var(--bg-base)",
+              borderTop: "1px solid var(--border)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <div style={{ display: "flex", gap: 8 }}>
+              {!scanError && (
+                <button
+                  onClick={toggleTorch}
+                  style={{
+                    padding: "6px 12px",
+                    borderRadius: 8,
+                    border: "1px solid var(--border)",
+                    background: torchOn ? "var(--accent-bg)" : "var(--bg-elevated)",
+                    color: torchOn ? "var(--accent-text)" : "var(--text-secondary)",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    cursor: "pointer",
+                    fontFamily: "inherit",
+                  }}
+                >
+                  {torchOn ? "🔦 Off" : "🔦 Torch"}
+                </button>
+              )}
+            </div>
+            <p
+              className="t-muted"
+              style={{ margin: 0, fontSize: 12, textAlign: "center" }}
+            >
+              Press <strong>ESC</strong> or click outside to close
+            </p>
           </div>
         </div>
       </div>
@@ -404,31 +624,16 @@ export default function PutAwayPage() {
                         <td style={{ padding: "12px 16px" }}><span className="t-success" style={{ fontWeight: 800, fontSize: 15 }}>{r.passQty}</span></td>
                         <td style={{ padding: "12px 16px" }}>{r.batch || "—"}</td>
                         <td style={{ padding: "12px 16px" }}>
-                          <div
-                            style={{
-                              display: "flex",
-                              gap: 8,
-                              alignItems: "center"
-                            }}
-                          >
-
+                          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
                             <input
                               type="text"
                               placeholder="e.g. A-01-R3"
                               value={scanLocs[r.id] || ""}
-                              onChange={e =>
-                                setScanLocs(p => ({
-                                  ...p,
-                                  [r.id]: e.target.value
-                                }))
-                              }
+                              onChange={e => setScanLocs(p => ({ ...p, [r.id]: e.target.value }))}
                               className="ims-input ims-input-sm"
-                              style={{
-                                width: 140
-                              }}
+                              style={{ width: 140 }}
                               disabled={!!shownLocs[r.id]}
                             />
-
                             {!shownLocs[r.id] && (
                               <button
                                 onClick={() => openScanner(r.id)}
@@ -447,17 +652,12 @@ export default function PutAwayPage() {
                                   minWidth: 40,
                                   transition: "0.2s"
                                 }}
-                                onMouseEnter={(e) => {
-                                  e.currentTarget.style.background = "var(--bg-hover)";
-                                }}
-                                onMouseLeave={(e) => {
-                                  e.currentTarget.style.background = "var(--bg-elevated)";
-                                }}
+                                onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-hover)"; }}
+                                onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-elevated)"; }}
                               >
                                 📷
                               </button>
                             )}
-
                           </div>
                         </td>
                         <td style={{ padding: "12px 16px" }}>
@@ -469,14 +669,12 @@ export default function PutAwayPage() {
                             {PICK_ZONES.map(z => <option key={z} value={z}>{z}</option>)}
                           </select>
                         </td>
-                        {/* Put Away action */}
                         <td style={{ padding: "12px 16px" }}>
                           {shownLocs[r.id]
                             ? <span className="ims-badge ims-badge-teal" style={{ fontFamily: "monospace" }}>{shownLocs[r.id]}</span>
                             : <Button variant="success" onClick={() => handleDone(r)}>Put Away ✓</Button>
                           }
                         </td>
-                        {/* ── Edit / Delete ── */}
                         <td style={{ padding: "12px 14px", whiteSpace: "nowrap" }}>
                           {!shownLocs[r.id] ? (
                             <div style={{ display: "flex", gap: 6 }}>

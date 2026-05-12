@@ -19,7 +19,6 @@ import { getAuth } from "firebase/auth";
 
 export { getAuth };
 
-// ── Firebase Config ──────────────────────────────────────
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
   authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
@@ -33,66 +32,76 @@ const firebaseConfig = {
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApps()[0];
 export const db = getFirestore(app);
 
+const sanitizeDoc = (d) => {
+  const data = d.data();
+  const { id: _idDiscard, _id: __idDiscard, docId: _docIdDiscard, ...cleanData } = data;
+  return { id: d.id, ...cleanData };
+};
+
 // ═══════════════════════════════════════════════════════════════
-// PAGINATED QUERIES (NEW — replaces getAll for large collections)
+// SMART PAGINATION — handles partial createdAt migration
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Get paginated documents with cursor-based pagination
- * @param {string} col - collection name
- * @param {number} pageSize - items per page (default: 50)
- * @param {DocumentSnapshot|null} lastDoc - cursor for next page
- * @returns {Promise<{docs: Array, lastDoc: DocumentSnapshot|null, hasMore: boolean}>}
+ * Get paginated documents.
+ * If createdAt is missing on some docs, fetches ALL docs to avoid hiding data.
  */
 export const getPaginated = async (col, pageSize = 50, lastDoc = null) => {
-  try {
-    let q;
-    
-    // Try with createdAt ordering
-    if (!lastDoc) {
-      q = query(
-        collection(db, col),
-        orderBy("createdAt", "desc"),
-        limit(pageSize)
-      );
-    } else {
-      q = query(
+  // If we're paginating (lastDoc exists), try createdAt ordering
+  if (lastDoc) {
+    try {
+      const q = query(
         collection(db, col),
         orderBy("createdAt", "desc"),
         startAfter(lastDoc),
         limit(pageSize)
       );
-    }
-    
-    const snap = await getDocs(q);
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    
-    // If we got results, great
-    if (docs.length > 0) {
+      const snap = await getDocs(q);
       return {
-        docs,
+        docs: snap.docs.map(sanitizeDoc),
         lastDoc: snap.docs[snap.docs.length - 1] || null,
         hasMore: snap.docs.length === pageSize,
       };
+    } catch (e) {
+      console.warn(`getPaginated(${col}) pagination failed:`, e.message);
+      return { docs: [], lastDoc: null, hasMore: false };
     }
-    
-    // If empty, maybe no createdAt field — fallback to unordered
-    throw new Error("No results with createdAt");
-    
+  }
+
+  // First page: check if collection has createdAt uniformly
+  try {
+    // Try ordering by createdAt
+    const q = query(collection(db, col), orderBy("createdAt", "desc"), limit(pageSize));
+    const snap = await getDocs(q);
+    const docs = snap.docs.map(sanitizeDoc);
+
+    // If we got results, check if this is the FULL collection
+    // by comparing with total count
+    const totalSnap = await getCountFromServer(collection(db, col));
+    const totalCount = totalSnap.data().count;
+
+    if (docs.length === totalCount) {
+      // All docs have createdAt — return as-is
+      return { docs, lastDoc: null, hasMore: false };
+    }
+
+    // Partial migration: some docs have createdAt, some don't
+    // Fetch ALL docs to avoid hiding unmigrated data
+    console.warn(
+      `getPaginated(${col}) partial migration detected: ` +
+      `${docs.length} docs have createdAt out of ${totalCount} total. ` +
+      `Fetching ALL docs to avoid hiding data.`
+    );
+    throw new Error("Partial migration — fetch all");
+
   } catch (e) {
-    console.warn(`getPaginated(${col}) createdAt query failed, using fallback:`, e.message);
-    
-    // Fallback: fetch without ordering (just limit)
+    // Fallback: fetch ALL documents
     try {
-      const q = lastDoc 
-        ? query(collection(db, col), startAfter(lastDoc), limit(pageSize))
-        : query(collection(db, col), limit(pageSize));
-      
-      const snap = await getDocs(q);
+      const snap = await getDocs(collection(db, col));
       return {
-        docs: snap.docs.map((d) => ({ id: d.id, ...d.data() })),
-        lastDoc: snap.docs[snap.docs.length - 1] || null,
-        hasMore: false, // Can't paginate reliably without order
+        docs: snap.docs.map(sanitizeDoc),
+        lastDoc: null,
+        hasMore: false,
       };
     } catch (fallbackErr) {
       console.error(`getPaginated(${col}) complete failure:`, fallbackErr);
@@ -101,9 +110,6 @@ export const getPaginated = async (col, pageSize = 50, lastDoc = null) => {
   }
 };
 
-/**
- * Get total count (lightweight — doesn't fetch documents)
- */
 export const getCount = async (col) => {
   try {
     const snap = await getCountFromServer(collection(db, col));
@@ -114,64 +120,34 @@ export const getCount = async (col) => {
   }
 };
 
-/**
- * Get first N documents (for small collections or initial load)
- */
 export const getRecent = async (col, limitCount = 100) => {
   try {
-    const q = query(
-      collection(db, col),
-      orderBy("createdAt", "desc"),
-      limit(limitCount)
-    );
+    const q = query(collection(db, col), orderBy("createdAt", "desc"), limit(limitCount));
     const snap = await getDocs(q);
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    
+    const docs = snap.docs.map(sanitizeDoc);
     if (docs.length > 0) return docs;
     throw new Error("No results");
-    
   } catch (e) {
-    console.warn(`getRecent(${col}) using fallback`);
-    const q = query(collection(db, col), limit(limitCount));
-    const snap = await getDocs(q);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    console.warn(`getRecent(${col}) fallback — fetching all`);
+    const snap = await getDocs(collection(db, col));
+    return snap.docs.map(sanitizeDoc);
   }
 };
 
-// ═══════════════════════════════════════════════════════════════
-// REAL-TIME SUBSCRIPTION (NEW — for dashboards/small collections)
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * Subscribe to real-time updates (use sparingly — large collections = expensive)
- * @returns {Function} unsubscribe function
- */
 export const subscribeToCollection = (col, callback, limitCount = 50) => {
-  const q = query(
-    collection(db, col),
-    orderBy("createdAt", "desc"),
-    limit(limitCount)
-  );
-  
+  const q = query(collection(db, col), orderBy("createdAt", "desc"), limit(limitCount));
   return onSnapshot(q, (snap) => {
-    const docs = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    callback(docs);
+    callback(snap.docs.map(sanitizeDoc));
   }, (err) => {
     console.error(`subscribeToCollection(${col})`, err);
+    getDocs(collection(db, col)).then(snap => callback(snap.docs.map(sanitizeDoc)));
   });
 };
 
-// ═══════════════════════════════════════════════════════════════
-// LEGACY FUNCTIONS (kept for compatibility — avoid for large collections)
-// ═══════════════════════════════════════════════════════════════
-
-/**
- * ⚠️ WARNING: Fetches ALL documents. Use getPaginated() instead for large collections.
- */
 export const getAll = async (col) => {
   try {
     const snap = await getDocs(collection(db, col));
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return snap.docs.map(sanitizeDoc);
   } catch (e) {
     console.error(`getAll(${col})`, e);
     return [];
@@ -180,9 +156,11 @@ export const getAll = async (col) => {
 
 export const addItem = async (col, data) => {
   try {
+    const now = new Date().toISOString();
     return await addDoc(collection(db, col), {
       ...data,
-      createdAt: data.createdAt || new Date().toISOString(),
+      createdAt: data.createdAt || now,
+      updatedAt: data.updatedAt || now,
     });
   } catch (e) {
     console.error(`addItem(${col})`, e);
@@ -215,16 +193,12 @@ export const searchByField = async (col, field, value) => {
   try {
     const q = query(collection(db, col), where(field, "==", value));
     const snap = await getDocs(q);
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    return snap.docs.map(sanitizeDoc);
   } catch (e) {
     console.error(`searchByField(${col})`, e);
     return [];
   }
 };
-
-// ═══════════════════════════════════════════════════════════════
-// ID GENERATORS (unchanged)
-// ═══════════════════════════════════════════════════════════════
 
 export const genOrderId = () => {
   const d = new Date();
@@ -278,7 +252,6 @@ export const genGrnReceivingId = () => {
   return `GRNR-${date}-${Math.floor(1000+Math.random()*9000)}`;
 };
 
-// CSV Export (unchanged)
 export const exportCSV = (filename, rows) => {
   if (!rows.length) return;
   const cols = Object.keys(rows[0]).filter((k) => k !== "id");
