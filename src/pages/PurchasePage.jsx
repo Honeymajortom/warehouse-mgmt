@@ -22,41 +22,292 @@ function BarcodeSvg({ value, svgRef }) {
   return <svg ref={svgRef} style={{ width: "100%", maxWidth: 360, color: "var(--text-primary)" }} />;
 }
 
+// ─── Shipping distance tiers from Nagpur ─────────────────────────────────────
+// Approximate road distances (km) from Nagpur for major Indian cities/states.
+// Used to pick a flat shipping charge tier for the PO.
+const SHIP_TIERS = [
+  // [ keyword list (lowercase),  distance km,  charge ₹ ]
+  [["nagpur", "wardha", "amravati", "yavatmal", "chandrapur", "gadchiroli", "bhandara", "gondia"], 0,    0],
+  [["pune", "nashik", "aurangabad", "nanded", "latur", "osmanabad", "solapur", "akola", "buldhana", "washim"], 500,  500],
+  [["mumbai", "thane", "raigad", "ratnagiri", "sindhudurg", "dhule", "nandurbar", "jalgaon", "kolhapur", "sangli", "satara"], 900,  900],
+  [["hyderabad", "secunderabad", "warangal", "nizamabad", "karimnagar", "raipur", "bilaspur", "bhopal", "indore", "jabalpur", "gwalior"], 600,  600],
+  [["bangalore", "bengaluru", "mysore", "hubli", "dharwad", "belgaum", "mangalore", "chennai", "madurai", "coimbatore", "kochi", "trivandrum", "visakhapatnam", "vijayawada", "tirupati"], 1200, 1200],
+  [["delhi", "noida", "gurugram", "faridabad", "ghaziabad", "agra", "jaipur", "lucknow", "kanpur", "varanasi", "allahabad", "patna", "ranchi"], 1100, 1100],
+  [["kolkata", "howrah", "bhubaneswar", "cuttack", "guwahati", "siliguri", "dhanbad"], 1400, 1400],
+  [["surat", "ahmedabad", "vadodara", "rajkot", "gandhinagar", "jodhpur", "udaipur", "kota", "ajmer"], 1000, 1000],
+  [["chandigarh", "ludhiana", "amritsar", "jalandhar", "shimla", "dehradun", "haridwar", "meerut", "aligarh"], 1300, 1300],
+];
+
+const DEFAULT_SHIP_CHARGE = 1500; // ₹ for unknown / very far locations
+
+function getShippingCharge(vendorAddress) {
+  if (!vendorAddress) return DEFAULT_SHIP_CHARGE;
+  const addr = vendorAddress.toLowerCase();
+  for (const [keywords, , charge] of SHIP_TIERS) {
+    if (keywords.some(k => addr.includes(k))) return charge;
+  }
+  return DEFAULT_SHIP_CHARGE;
+}
+
+function getShippingLabel(vendorAddress) {
+  if (!vendorAddress) return `₹${DEFAULT_SHIP_CHARGE.toLocaleString("en-IN")} (estimated)`;
+  const addr = vendorAddress.toLowerCase();
+  for (const [keywords, dist, charge] of SHIP_TIERS) {
+    if (keywords.some(k => addr.includes(k))) {
+      if (dist === 0) return "—  (local / ex-premises)";
+      return `₹${charge.toLocaleString("en-IN")}  (~${dist} km)`;
+    }
+  }
+  return `₹${DEFAULT_SHIP_CHARGE.toLocaleString("en-IN")} (long distance)`;
+}
+
+// ─── Company / Ship-To constants ─────────────────────────────────────────────
+const COMPANY = {
+  name:    "3APJ WMS",
+  address: "MIDC Eduspark, Nagpur, Maharashtra — 440001",
+  phone:   "+91-XXXXXXXXXX",       // ← replace with real number
+  email:   "accounts@3apjwms.in",  // ← replace with real email
+  gst:     "",                     // ← fill in if applicable
+};
+
+// ─── UPDATED printPO ──────────────────────────────────────────────────────────
 const printPO = (poGroup, svgEl) => {
-  const grandTotal = poGroup.items.reduce((s, r) => s + Number(r.totalCost || 0), 0);
-  let svgHtml = "";
-  if (svgEl) { const c = svgEl.cloneNode(true); c.style.color = "#000"; c.querySelectorAll("rect,path").forEach(el => { if (!el.getAttribute("fill") || el.getAttribute("fill") === "currentColor") el.setAttribute("fill", "#000"); }); svgHtml = c.outerHTML; }
+  const item0      = poGroup.items[0] || {};
+  console.log("[printPO] item0:", item0); 
+  const subtotal   = poGroup.items.reduce((s, r) => s + Number(r.totalCost || 0), 0);
+  const taxAmt     = Math.round(subtotal * 0.18 * 100) / 100;          // 18% GST
+  const vendorAddr = item0.vendorAddress || "";
+  const shipAmt    = getShippingCharge(vendorAddr);
+  const shipLabel  = getShippingLabel(vendorAddr);
+  const grandTotal = subtotal + taxAmt + shipAmt;
+  const dateStr    = poGroup.date ? new Date(poGroup.date).toLocaleDateString("en-IN") : new Date().toLocaleDateString("en-IN");
+
+  // Barcode SVG clone
+  let barcodeHtml = "";
+  if (svgEl) {
+    const c = svgEl.cloneNode(true);
+    c.style.color = "#000";
+    c.querySelectorAll("rect,path").forEach(el => {
+      if (!el.getAttribute("fill") || el.getAttribute("fill") === "currentColor") el.setAttribute("fill", "#000");
+    });
+    barcodeHtml = `<div class="barcode-wrap">${c.outerHTML}<div class="barcode-num">${poGroup.poNumber}</div></div>`;
+  }
+
+  // Pad to 18 rows
+  const MIN_ROWS = 18;
+  const rows     = [...poGroup.items];
+  while (rows.length < MIN_ROWS) rows.push(null);
+
+  const rowsHtml = rows.map(r => r
+    ? `<tr>
+        <td class="td-sku">${r.skuId || "—"}</td>
+        <td class="td-product">${r.productName || "—"}</td>
+        <td class="td-num">${r.units || 0}</td>
+        <td class="td-num">₹${Number(r.costPerHead || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+        <td class="td-num td-total">₹${Number(r.totalCost || 0).toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
+       </tr>`
+    : `<tr>
+        <td class="td-sku"></td><td class="td-product"></td>
+        <td class="td-num"></td><td class="td-num"></td>
+        <td class="td-num td-total td-dash">—</td>
+       </tr>`
+  ).join("");
+
+  // Vendor contact block for footer
+  const vendorFooterLines = [
+    poGroup.vendorName           ? `<strong>${poGroup.vendorName}</strong>` : null,
+    item0.vendorContact          ? `Phone: ${item0.vendorContact}`          : null,
+    item0.vendorEmail            ? `Email: ${item0.vendorEmail}`            : null,
+    item0.vendorAddress          ? `Address: ${item0.vendorAddress}`        : null,
+    item0.vendorGst              ? `GST: ${item0.vendorGst}`                : null,
+  ].filter(Boolean).join("&nbsp;&nbsp;·&nbsp;&nbsp;");
+
   const win = window.open("", "_blank");
-  win.document.write(`<!DOCTYPE html><html><head><title>PO — ${poGroup.poNumber}</title>
-<style>*{box-sizing:border-box;margin:0;padding:0;}body{font-family:Arial,sans-serif;color:#111;padding:28px;background:#fff;}
-.wrap{max-width:680px;margin:0 auto;border:2px solid #111;border-radius:10px;padding:24px;}
-.head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:16px;margin-bottom:18px;}
-.title{font-size:22px;font-weight:900;letter-spacing:.1em;}.brand{font-size:11px;color:#666;margin-top:4px;}
-.meta{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:18px;}
-.mf{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#888;}.mv{font-size:13px;font-weight:700;}
-table{width:100%;border-collapse:collapse;margin-bottom:14px;}th{background:#f0f0f0;padding:7px 10px;text-align:left;font-size:11px;text-transform:uppercase;border-bottom:2px solid #ddd;}
-td{padding:7px 10px;font-size:13px;border-bottom:1px solid #eee;}.trow td{font-weight:700;background:#f9f9f9;border-top:2px solid #ddd;}
-.grand{font-size:17px;font-weight:900;text-align:right;padding:10px 10px 0;border-top:2px solid #111;}
-.bc{text-align:center;margin-top:18px;padding:12px;border:1px solid #ddd;border-radius:6px;background:#f9f9f9;}
-.bc svg{width:100%;max-width:360px;display:block;margin:0 auto;}.bnum{font-family:monospace;font-size:11px;color:#777;margin-top:5px;}
-.footer{margin-top:14px;font-size:10px;color:#bbb;text-align:center;}@media print{body{padding:0;}}</style></head><body>
-<div class="wrap">
-<div class="head"><div><div class="title">PURCHASE ORDER</div><div class="brand">MIDC IMS · Eduspark</div></div>
-<div style="text-align:right"><div class="mf">PO Number</div><div class="mv" style="font-family:monospace">${poGroup.poNumber}</div></div></div>
-<div class="meta">
-<div><div class="mf">Vendor</div><div class="mv">${poGroup.vendorName || "—"}</div></div>
-<div><div class="mf">Date</div><div class="mv">${poGroup.date ? new Date(poGroup.date).toLocaleDateString() : "—"}</div></div>
-<div><div class="mf">Status</div><div class="mv">${poGroup.status}</div></div>
-<div><div class="mf">Items</div><div class="mv">${poGroup.items.length}</div></div></div>
-<table><thead><tr><th>#</th><th>Product</th><th>SKU</th><th style="text-align:right">Qty</th><th style="text-align:right">Cost/Unit</th><th style="text-align:right">Total</th></tr></thead>
-<tbody>${poGroup.items.map((r, i) => `<tr><td>${i + 1}</td><td>${r.productName || "—"}</td><td>${r.skuId || "—"}</td><td style="text-align:right">${r.units || 0}</td><td style="text-align:right">₹${Number(r.costPerHead || 0).toLocaleString()}</td><td style="text-align:right;font-weight:700">₹${Number(r.totalCost || 0).toLocaleString()}</td></tr>`).join("")}
-<tr class="trow"><td colspan="5" style="text-align:right">Grand Total</td><td style="text-align:right">₹${grandTotal.toLocaleString()}</td></tr></tbody></table>
-<div class="grand">Grand Total: ₹${grandTotal.toLocaleString()}</div>
-<div class="bc">${svgHtml || `<div style="font-family:monospace;font-size:26px;letter-spacing:.15em">||| ${poGroup.poNumber} |||</div>`}<div class="bnum">${poGroup.poNumber}</div></div>
-<div class="footer">Generated by MIDC IMS · ${new Date().toLocaleString()}</div></div>
-<script>window.onload=()=>{window.print();}</script></body></html>`);
+  win.document.write(`<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8"/>
+  <title>Purchase Order — ${poGroup.poNumber}</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: Arial, Helvetica, sans-serif; font-size: 11px; color: #111; background: #fff; padding: 20px; }
+
+    .po-wrap { max-width: 720px; margin: 0 auto; border: 2px solid #1565C0; border-radius: 4px; overflow: hidden; }
+
+    /* Header */
+    .po-header { display: flex; align-items: flex-start; padding: 18px 20px 14px; border-bottom: 1px solid #e0e0e0; gap: 16px; }
+    .po-logo-box { width: 160px; min-width: 160px; height: 90px; background: #0a1628; border-radius: 3px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+    .po-logo-text { color: #fff; font-size: 28px; font-weight: 900; letter-spacing: -1px; }
+    .po-logo-text span { color: #1e88e5; }
+    .po-title-block { flex: 1; text-align: right; }
+    .po-title-purchase { font-size: 32px; font-weight: 900; color: #1565C0; letter-spacing: 2px; line-height: 1; }
+    .po-title-order    { font-size: 26px; font-weight: 900; color: #1565C0; letter-spacing: 1px; line-height: 1; margin-top: 2px; }
+    .po-meta-grid { display: grid; grid-template-columns: auto auto; gap: 2px 12px; margin-top: 8px; justify-content: end; }
+    .po-meta-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: #444; text-align: left; }
+    .po-meta-val   { font-size: 10px; font-weight: 700; color: #111; font-family: monospace; }
+
+    /* Vendor / Ship-To */
+    .po-parties { display: grid; grid-template-columns: 1fr 1fr; border-bottom: 1px solid #e0e0e0; }
+    .po-party { padding: 0 0 12px; }
+    .po-party:first-child { border-right: 1px solid #e0e0e0; }
+    .po-party-header { background: #1565C0; color: #fff; font-size: 10px; font-weight: 900; letter-spacing: 0.12em; padding: 5px 14px; text-transform: uppercase; }
+    .po-party-body { padding: 10px 14px 0; line-height: 1.75; font-size: 11px; }
+    .po-party-body .co-name { font-weight: 700; font-size: 12px; }
+    .po-party-body .muted   { color: #555; }
+
+    /* Items table */
+    .items-table { width: 100%; border-collapse: collapse; }
+    .items-table thead tr { background: #1565C0; color: #fff; }
+    .items-table thead th { padding: 7px 10px; font-size: 10px; font-weight: 900; text-transform: uppercase; letter-spacing: 0.06em; text-align: left; border-right: 1px solid rgba(255,255,255,0.2); }
+    .items-table thead th:last-child { border-right: none; }
+    .items-table tbody td { border-bottom: 1px solid #e8e8e8; border-right: 1px solid #e8e8e8; padding: 5px 10px; font-size: 11px; height: 22px; }
+    .items-table tbody td:last-child { border-right: none; }
+    .items-table tbody tr:nth-child(odd)  td { background: #fff; }
+    .items-table tbody tr:nth-child(even) td { background: #f7f9fc; }
+    .td-sku     { font-family: monospace; width: 100px; color: #333; }
+    .td-product { }
+    .td-num     { text-align: right; width: 80px; }
+    .td-total   { font-weight: 700; background: #eef2f8 !important; }
+    .td-dash    { color: #aaa; font-weight: 400; }
+
+    /* Footer row: note + totals */
+    .po-footer-row { display: flex; border-top: 2px solid #1565C0; }
+    .po-note { flex: 1; padding: 12px 16px; font-size: 10px; font-weight: 700; color: #333; border-right: 1px solid #e0e0e0; display: flex; align-items: flex-start; }
+    .po-totals { width: 260px; flex-shrink: 0; }
+    .po-totals-row { display: flex; justify-content: space-between; align-items: center; padding: 5px 12px; border-bottom: 1px solid #e8e8e8; font-size: 11px; }
+    .po-totals-row .lbl { color: #444; font-weight: 600; }
+    .po-totals-row .val { font-family: monospace; color: #333; text-align: right; }
+    .po-totals-row.tax-row .lbl { color: #1565C0; }
+    .po-totals-row.tax-row .val { color: #1565C0; font-weight: 700; }
+    .po-totals-row.ship-row .lbl { color: #555; font-size: 10px; }
+    .po-totals-row.ship-row .val { color: #555; font-size: 10px; }
+    .po-totals-row.grand { background: #FFC107; border-top: 1px solid #e0a800; }
+    .po-totals-row.grand .lbl { font-weight: 900; font-size: 12px; color: #111; }
+    .po-totals-row.grand .val { font-weight: 900; font-size: 12px; color: #111; }
+
+    /* Barcode */
+    .barcode-section { padding: 12px 20px 10px; display: flex; justify-content: center; border-top: 1px solid #e0e0e0; }
+    .barcode-wrap { text-align: center; }
+    .barcode-wrap svg { width: 240px; max-width: 100%; display: block; margin: 0 auto; }
+    .barcode-num { font-family: monospace; font-size: 10px; color: #777; margin-top: 3px; letter-spacing: 0.08em; }
+
+    /* Contact footer */
+    .po-contact-footer { text-align: center; padding: 14px 20px 16px; font-size: 10px; color: #555; line-height: 1.9; border-top: 1px solid #e8e8e8; }
+    .po-contact-footer .vendor-details { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 600; color: #111; }
+
+    @media print { body { padding: 0; } .po-wrap { border-radius: 0; } }
+  </style>
+</head>
+<body>
+<div class="po-wrap">
+
+  <!-- Header -->
+  <div class="po-header">
+    <div class="po-logo-box">
+      <div class="po-logo-text"><span>3</span>APJ</div>
+    </div>
+    <div class="po-title-block">
+      <div class="po-title-purchase">PURCHASE</div>
+      <div class="po-title-order">ORDER</div>
+      <div class="po-meta-grid">
+        <div class="po-meta-label">DATE</div><div class="po-meta-val">${dateStr}</div>
+        <div class="po-meta-label">PO #</div><div class="po-meta-val">${poGroup.poNumber}</div>
+        <div class="po-meta-label">STATUS</div><div class="po-meta-val">${poGroup.status}</div>
+      </div>
+    </div>
+  </div>
+
+<!-- Vendor / Ship-To -->
+  <div class="po-parties">
+    <div class="po-party">
+      <div class="po-party-header">Vendor</div>
+      <div class="po-party-body">
+        <div class="co-name">${poGroup.vendorName || "—"}</div>
+        ${item0.vendorContact ? `<div class="muted">Phone: ${item0.vendorContact}</div>` : ""}
+        ${item0.vendorEmail ? `<div class="muted">Email: ${item0.vendorEmail || "—"}</div>` : ""}
+        ${item0.vendorGst     ? `<div class="muted">GST: ${item0.vendorGst}</div>`       : ""}
+        ${item0.vendorAddress ? `<div class="muted">Address: ${item0.vendorAddress || "—"}</div>` : ""}
+        ${(() => { const pin = (item0.vendorAddress || "").match(/\b[1-9][0-9]{5}\b/); return pin ? `<div class="muted">Pincode: ${pin[0]}</div>` : ""; })()}
+      </div>
+    </div>
+    <div class="po-party">
+      <div class="po-party-header">Ship To</div>
+      <div class="po-party-body">
+        <div class="co-name">${COMPANY.name}</div>
+        <div class="muted">${COMPANY.address}</div>
+        <div class="muted">Phone: ${COMPANY.phone}</div>
+        <div class="muted">Email: ${COMPANY.email}</div>
+        ${COMPANY.gst ? `<div class="muted">GST: ${COMPANY.gst}</div>` : ""}
+      </div>
+    </div>
+  </div>
+
+  <!-- Items table -->
+  <table class="items-table">
+    <thead>
+      <tr>
+        <th class="td-sku">SKU ID #</th>
+        <th class="td-product">Product Name</th>
+        <th class="td-num">QTY</th>
+        <th class="td-num">Unit Price</th>
+        <th class="td-num">Total</th>
+      </tr>
+    </thead>
+    <tbody>${rowsHtml}</tbody>
+  </table>
+
+  <!-- Footer: note + totals -->
+  <div class="po-footer-row">
+    <div class="po-note">
+      Goods once sold will not be taken back.<br/>Delivery Ex-Premises.
+    </div>
+    <div class="po-totals">
+      <div class="po-totals-row">
+        <span class="lbl">SUBTOTAL</span>
+        <span class="val">₹${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+      </div>
+      <div class="po-totals-row tax-row">
+        <span class="lbl">TAX (GST 18%)</span>
+        <span class="val">₹${taxAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+      </div>
+      <div class="po-totals-row ship-row">
+        <span class="lbl">SHIPPING${vendorAddr ? ` <em style="font-weight:400;font-style:normal;font-size:9px;color:#888">(${vendorAddr.split(",").slice(-2).join(",").trim()})</em>` : ""}</span>
+        <span class="val">${shipLabel}</span>
+      </div>
+      <div class="po-totals-row">
+        <span class="lbl">OTHER</span>
+        <span class="val">—</span>
+      </div>
+      <div class="po-totals-row grand">
+        <span class="lbl">TOTAL</span>
+        <span class="val">₹ ${grandTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Barcode -->
+  ${barcodeHtml ? `<div class="barcode-section">${barcodeHtml}</div>` : ""}
+
+<!-- Contact footer -->
+  <div class="po-contact-footer">
+    If you have any questions about this purchase order, please contact<br/>
+    <span class="vendor-details">
+      ${poGroup.vendorName || "—"}
+      ${item0.vendorContact ? `&nbsp;·&nbsp; Phone: ${item0.vendorContact}` : ""}
+      ${item0.vendorEmail   ? `&nbsp;·&nbsp; Email: ${item0.vendorEmail}`   : ""}
+    </span><br/>
+    <span style="font-size:9px;color:#aaa;margin-top:4px;display:inline-block">
+      Generated by 3APJ WMS · ${new Date().toLocaleString("en-IN")}
+    </span>
+  </div>
+
+</div>
+<script>window.onload = () => { window.print(); }</script>
+</body>
+</html>`);
   win.document.close();
 };
+// ─── END printPO ──────────────────────────────────────────────────────────────
 
 export default function PurchasePage() {
   const [tab, setTab] = useState("PO List");
@@ -69,10 +320,10 @@ export default function PurchasePage() {
   const [draftPO, setDraftPO] = useState(null);
   const [expandedPO, setExpandedPO] = useState(null);
   const barcodeRefs = useRef({});
-  const isLoadingRef = useRef(false); // ← guard against duplicate loads
+  const isLoadingRef = useRef(false);
 
   const load = async () => {
-    if (isLoadingRef.current) return; // ← prevent duplicate concurrent loads
+    if (isLoadingRef.current) return;
     isLoadingRef.current = true;
     setLoading(true);
     try {
@@ -107,9 +358,6 @@ export default function PurchasePage() {
   const grouped = groupByPO(purchases);
   const uniqueVendors = [...new Map(vendors.map(v => [v.vendorName, v])).values()];
 
-  // ── OPTIONAL: filter products by selected vendor ──
-  // Set filterByVendor = true if you want the product dropdown to only show
-  // products belonging to the selected vendor.
   const filterByVendor = true;
   const availableProducts = filterByVendor && draftPO?.vendorName
     ? products.filter(p => p.vendorName === draftPO.vendorName)
@@ -122,6 +370,7 @@ export default function PurchasePage() {
 
   const handleVendorSelect = vendorName => {
     const v = vendors.find(v => v.vendorName === vendorName) || {};
+    console.log("[VendorSelect] raw vendor doc:", v); 
     setDraftPO(d => ({ ...d, vendorName, vendorInfo: { vendorName, contact: v.contact || "", email: v.email || "", gstNo: v.gstNo || "", address: v.address || "" } }));
   };
 
@@ -139,29 +388,19 @@ export default function PurchasePage() {
   const selectProduct = (id, name) => {
     const p = products.find(prod => prod.productName === name);
     if (!p) return;
-
     const buying = p.buyingPrice ?? p.costPrice ?? p.mrp ?? "";
-
     setDraftPO(d => ({
       ...d,
       rows: d.rows.map(r => {
         if (r._id !== id) return r;
-        const total = r.units && buying
-          ? String(Math.round(Number(r.units) * Number(buying) * 100) / 100)
-          : "";
-        return {
-          ...r,
-          productName: name,
-          skuId: p.skuId || "",
-          costPerHead: String(buying),
-          totalCost: total
-        };
+        const total = r.units && buying ? String(Math.round(Number(r.units) * Number(buying) * 100) / 100) : "";
+        return { ...r, productName: name, skuId: p.skuId || "", costPerHead: String(buying), totalCost: total };
       })
     }));
   };
 
-  const addRow = () => setDraftPO(d => ({ ...d, rows: [...d.rows, emptyRow()] }));
-  const removeRow = id => setDraftPO(d => ({ ...d, rows: d.rows.filter(r => r._id !== id) }));
+  const addRow    = () => setDraftPO(d => ({ ...d, rows: [...d.rows, emptyRow()] }));
+  const removeRow = id  => setDraftPO(d => ({ ...d, rows: d.rows.filter(r => r._id !== id) }));
 
   const handleDonePurchasing = async () => {
     const valid = draftPO.rows.filter(r => r.productName);
@@ -172,17 +411,19 @@ export default function PurchasePage() {
       const audit = getAuditFields();
       for (const r of valid) {
         await addItem("purchases", {
-          poNumber: draftPO.poNumber,
-          purchaseDate: draftPO.purchaseDate,
-          vendorName: draftPO.vendorName,
-          vendorContact: draftPO.vendorInfo?.contact || "",
-          vendorGst: draftPO.vendorInfo?.gstNo || "",
-          productName: r.productName,
-          skuId: r.skuId,
-          units: Number(r.units || 0),
-          costPerHead: Number(r.costPerHead || 0),
-          totalCost: Number(r.totalCost || 0),
-          status: "ACTIVE",
+          poNumber:      draftPO.poNumber,
+          purchaseDate:  draftPO.purchaseDate,
+          vendorName:    draftPO.vendorName,
+          vendorContact: draftPO.vendorInfo?.contact  || "",
+          vendorEmail:   draftPO.vendorInfo?.email    || "",   // ← now saved
+          vendorGst:     draftPO.vendorInfo?.gstNo    || "",
+          vendorAddress: draftPO.vendorInfo?.address  || "",   // ← now saved
+          productName:   r.productName,
+          skuId:         r.skuId,
+          units:         Number(r.units || 0),
+          costPerHead:   Number(r.costPerHead || 0),
+          totalCost:     Number(r.totalCost || 0),
+          status:        "ACTIVE",
           ...audit
         });
       }
@@ -360,9 +601,7 @@ export default function PurchasePage() {
                     <select className="ims-input" value={draftPO.vendorName} onChange={e => handleVendorSelect(e.target.value)}>
                       <option value="">Select vendor…</option>
                       {uniqueVendors.map(v => (
-                        <option key={`vendor-opt-${v.id || v.vendorName}`} value={v.vendorName}>
-                          {v.vendorName}
-                        </option>
+                        <option key={`vendor-opt-${v.id || v.vendorName}`} value={v.vendorName}>{v.vendorName}</option>
                       ))}
                     </select>
                   </div>
@@ -394,24 +633,16 @@ export default function PurchasePage() {
                       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
                         <span className="ims-section-title" style={{ margin: 0 }}>Product {idx + 1}</span>
                         {draftPO.rows.length > 1 && (
-                          <button onClick={() => removeRow(row._id)} className="ims-btn ims-btn-ghost" style={{ padding: "3px 10px", fontSize: 12, color: "var(--danger-text)" }}>
-                            ✕ Remove
-                          </button>
+                          <button onClick={() => removeRow(row._id)} className="ims-btn ims-btn-ghost" style={{ padding: "3px 10px", fontSize: 12, color: "var(--danger-text)" }}>✕ Remove</button>
                         )}
                       </div>
                       <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr 1fr 1fr", gap: 12, alignItems: "end" }}>
                         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                           <label className="ims-label">Product</label>
-                          <select
-                            className="ims-input"
-                            value={row.productName}
-                            onChange={(e) => selectProduct(row._id, e.target.value)}
-                          >
+                          <select className="ims-input" value={row.productName} onChange={e => selectProduct(row._id, e.target.value)}>
                             <option value="">Select product…</option>
-                            {availableProducts.map((p) => (
-                              <option key={`product-opt-${p.id || p.skuId || p.productName}`} value={p.productName}>
-                                {p.productName}
-                              </option>
+                            {availableProducts.map(p => (
+                              <option key={`product-opt-${p.id || p.skuId || p.productName}`} value={p.productName}>{p.productName}</option>
                             ))}
                           </select>
                         </div>
@@ -428,14 +659,7 @@ export default function PurchasePage() {
                             Cost / Unit ₹
                             {row.costPerHead && <span className="ims-badge ims-badge-green" style={{ fontSize: 9, padding: "1px 5px" }}>Auto</span>}
                           </label>
-                          <input
-                            type="number"
-                            className="ims-input"
-                            value={row.costPerHead}
-                            onChange={e => updateRow(row._id, "costPerHead", e.target.value)}
-                            placeholder={row.productName ? "Enter cost…" : "—"}
-                            style={{ borderColor: row.costPerHead ? "var(--success)" : undefined }}
-                          />
+                          <input type="number" className="ims-input" value={row.costPerHead} onChange={e => updateRow(row._id, "costPerHead", e.target.value)} placeholder={row.productName ? "Enter cost…" : "—"} style={{ borderColor: row.costPerHead ? "var(--success)" : undefined }} />
                         </div>
                         <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
                           <label className="ims-label">Total ₹</label>
@@ -445,9 +669,7 @@ export default function PurchasePage() {
                         </div>
                       </div>
                       {row.productName && !row.costPerHead && (
-                        <p className="t-warning" style={{ margin: "8px 0 0", fontSize: 11 }}>
-                          ⚠ No buying price found for this product — enter manually
-                        </p>
+                        <p className="t-warning" style={{ margin: "8px 0 0", fontSize: 11 }}>⚠ No buying price found for this product — enter manually</p>
                       )}
                     </div>
                   ))}
@@ -471,15 +693,7 @@ export default function PurchasePage() {
       )}
 
       {/* Footer Credit */}
-      <div style={{
-        textAlign: "center",
-        padding: "16px 0",
-        fontSize: "14px",
-        color: "var(--text-primary)",
-        borderTop: "1px solid var(--border)",
-        marginTop: "30px",
-        opacity: 0.8
-      }}>
+      <div style={{ textAlign: "center", padding: "16px 0", fontSize: "14px", color: "var(--text-primary)", borderTop: "1px solid var(--border)", marginTop: "30px", opacity: 0.8 }}>
         © {new Date().getFullYear()} 3APJ WMS · Engineered by Amit Waghmare & Ajay Rathod · Powered by Firebase
       </div>
     </div>
