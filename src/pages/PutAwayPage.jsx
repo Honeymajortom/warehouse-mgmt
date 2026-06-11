@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
 import { BrowserMultiFormatReader } from "@zxing/browser";
 import { getAll, searchByField, updateItem, addItem, deleteItem, genTxnId } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 import { CATEGORY_LIST, PICK_ZONES, DEFAULT_ZONE_MAP, CATEGORIES } from "../data/categories.js";
 
@@ -39,10 +40,10 @@ export default function PutAwayPage() {
 
   const load = async () => {
     setLoading(true);
-    const [q, done, mapping] = await Promise.all([
-      getAll("putawayqueue"),
-      getAll("putawaydata"),
-      getAll("pickzonemapping"),
+    const [{ data: q }, { data: done }, { data: mapping }] = await Promise.all([
+      cacheManager.getOrFetch("getall:putawayqueue",   () => getAll("putawayqueue"),   CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:putawaydata",    () => getAll("putawaydata"),    CACHE_TTL.MEDIUM),
+      cacheManager.getOrFetch("getall:pickzonemapping",() => getAll("pickzonemapping"),CACHE_TTL.LONG),
     ]);
     setQueue(q.filter(r => r.putAwayStatus === "Pending"));
     setDoneList(done);
@@ -56,6 +57,15 @@ export default function PutAwayPage() {
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
+
+  const reload = async () => {
+    await Promise.all([
+      cacheManager.invalidate("getall:putawayqueue"),
+      cacheManager.invalidate("getall:putawaydata"),
+      cacheManager.invalidate("getall:inventory"),
+    ]).catch(() => {});
+    await load();
+  };
 
   // ── Scanner: initialize AFTER modal renders ────────────────
   useEffect(() => {
@@ -228,7 +238,7 @@ export default function PutAwayPage() {
 
     await updateItem("putawayqueue", item.id, { putAwayStatus: "Done", location: loc, pickZone: zone });
     setToast({ msg: `${item.productName} → ${loc} [${zone}] · Inventory updated`, type: "success" });
-    load();
+    reload();
   };
 
   // ── Put-Away Queue: Edit handlers ────────────────────────
@@ -261,7 +271,7 @@ export default function PutAwayPage() {
       });
       setToast({ msg: `${editQueue.skuId} updated in queue`, type: "success" });
       setEditQueue(null);
-      load();
+      reload();
     } catch (e) {
       setToast({ msg: "Update failed: " + e.message, type: "error" });
     }
@@ -273,7 +283,7 @@ export default function PutAwayPage() {
     try {
       await deleteItem("putawayqueue", r.id);
       setToast({ msg: `${r.productName} removed from queue`, type: "success" });
-      load();
+      reload();
     } catch (e) {
       setToast({ msg: "Delete failed: " + e.message, type: "error" });
     }

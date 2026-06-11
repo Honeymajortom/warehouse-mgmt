@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import useCrud from "../hooks/useCrud";
 import { getAll } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Table, Td, Badge, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 import Modal from "../components/ui/Modal";
 import { CATEGORIES, CATEGORY_LIST } from "../data/categories.js";
@@ -306,7 +307,10 @@ export default function ProductsPage() {
 
   useEffect(() => { listPagination.reset(); }, [search]);
   useEffect(() => { listPagination.reset(); editPagination.reset(); }, [tab]);
-  useEffect(() => { getAll("vendors").then(setVendors); }, []);
+  useEffect(() => {
+    cacheManager.getOrFetch("purchase:vendors", () => getAll("vendors"), CACHE_TTL.MEDIUM)
+      .then(({ data }) => setVendors(data));
+  }, []);
 
   const f = k => e => setForm(p => ({ ...p, [k]: e.target.value }));
 

@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getAll, addItem, updateItem, searchByField, genReturnId, genPvId, genTxnId } from "../services/firestoreService";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 
 const REMARKS   = ["Damage","Quality Issue","Minor Scratch","Loss","Fraud"];
 const CONDITION = ["Very Good","Good","QC Failed"];
@@ -33,12 +34,12 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
 
   const refresh = async () => {
     setLoading(true);
-    const [customers, pv, rto, rpv, rt] = await Promise.all([
-      getAll("customers"),
-      getAll("pvprocess"),
-      getAll("rtoprocess"),
-      getAll("rpvprocess"),
-      getAll("returnstable"),
+    const [{ data: customers }, { data: pv }, { data: rto }, { data: rpv }, { data: rt }] = await Promise.all([
+      cacheManager.getOrFetch("getall:customers",    () => getAll("customers"),    CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:pvprocess",    () => getAll("pvprocess"),    CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:rtoprocess",   () => getAll("rtoprocess"),   CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:rpvprocess",   () => getAll("rpvprocess"),   CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:returnstable", () => getAll("returnstable"), CACHE_TTL.SHORT),
     ]);
     const doneIds = new Set(rt.map(r => r.orderId));
     const pvIds   = new Set([...pv, ...rto, ...rpv].map(r => r.orderId));
@@ -57,7 +58,18 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
     setLoading(false);
   };
   useEffect(() => { refresh(); }, []);
-  useEffect(() => { if (shippedOrder) { refresh(); clearShipped(); } }, [shippedOrder]);
+  useEffect(() => { if (shippedOrder) { reload().then(clearShipped); } }, [shippedOrder]);
+
+  const reload = async () => {
+    await Promise.all([
+      cacheManager.invalidate("getall:customers"),
+      cacheManager.invalidate("getall:pvprocess"),
+      cacheManager.invalidate("getall:rtoprocess"),
+      cacheManager.invalidate("getall:rpvprocess"),
+      cacheManager.invalidate("getall:returnstable"),
+    ]).catch(() => {});
+    await refresh();
+  };
 
   // ── Start Process → PV ──
   const handleStartProcess = async (order) => {
@@ -70,7 +82,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
     });
     setToast({ msg:`PV ${pvId} started`, type:"success" });
     setTab("PV");
-    refresh();
+    reload();
   };
 
   // ── PV → RTO ──
@@ -84,7 +96,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
     await updateItem("pvprocess", item.id, { status:"RTO" });
     setToast({ msg:`RTO initiated — ${item.returnId}`, type:"success" });
     setTab("RTO");
-    refresh();
+    reload();
   };
 
   // ── PV → RPV ──
@@ -100,7 +112,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
     await updateItem("pvprocess", item.id, { status:"RPV" });
     setToast({ msg:`RPV initiated — ${item.returnId}`, type:"success" });
     setTab("RPV");
-    refresh();
+    reload();
   };
 
   // ── RTO: send QC Failed qty → RPV (partial support) ──
@@ -134,7 +146,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
       setToast({ msg:`All ${pQty} unit(s) moved to RPV — ${item.returnId}`, type:"success" });
       setTab("RPV");
     }
-    refresh();
+    reload();
   };
 
   // ── RTO: Done / Pass (partial support) ──
@@ -168,7 +180,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
       setProcessQtys(p => { const n={...p}; delete n[item.id]; return n; });
       setToast({ msg:`RTO complete — all ${pQty} unit(s) processed`, type:"success" });
     }
-    refresh();
+    reload();
   };
 
   const updateRTO = async (id, key, value) => {
@@ -211,7 +223,7 @@ export default function ReturnsPage({ shippedOrder, clearShipped }) {
 
     await updateItem("rpvprocess", item.id, { status:"Done", scanLocation:loc, returnCategory:locMeta?.code||null });
     setScanLocs(p => { const n={...p}; delete n[item.id]; return n; });
-    refresh();
+    reload();
   };
 
   const updateRPV = async (id, key, value) => {

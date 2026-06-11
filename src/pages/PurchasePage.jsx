@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import JsBarcode from "jsbarcode";
 import { getAll, addItem, deleteItem, updateItem, genPoNumber } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Badge, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 
 const emptyRow = () => ({ _id: Date.now() + Math.random(), productName: "", skuId: "", units: "", costPerHead: "", totalCost: "" });
@@ -327,10 +328,10 @@ export default function PurchasePage() {
     isLoadingRef.current = true;
     setLoading(true);
     try {
-      const [purchasesData, vendorsData, productsData] = await Promise.all([
-        getAll("purchases"),
-        getAll("vendors"),
-        getAll("products")
+      const [{ data: purchasesData }, { data: vendorsData }, { data: productsData }] = await Promise.all([
+        cacheManager.getOrFetch("purchase:purchases", () => getAll("purchases"), CACHE_TTL.SHORT),
+        cacheManager.getOrFetch("purchase:vendors", () => getAll("vendors"), CACHE_TTL.MEDIUM),
+        cacheManager.getOrFetch("purchase:products", () => getAll("products"), CACHE_TTL.MEDIUM),
       ]);
 
       console.log("[PurchasePage] Loaded:", {
@@ -351,6 +352,11 @@ export default function PurchasePage() {
       setLoading(false);
       isLoadingRef.current = false;
     }
+  };
+
+  const reload = async () => {
+    try { await cacheManager.invalidate("purchase:purchases"); } catch (_) {}
+    await load();
   };
 
   useEffect(() => { load(); }, []);
@@ -429,7 +435,7 @@ export default function PurchasePage() {
       }
       const grandTotal = valid.reduce((s, r) => s + Number(r.totalCost || 0), 0);
       setToast({ msg: `PO ${draftPO.poNumber} saved — ${valid.length} product(s) · ₹${grandTotal.toLocaleString()}`, type: "success" });
-      await load();
+      await reload();
       setExpandedPO(draftPO.poNumber);
       setDraftPO(null);
       setTab("PO List");
@@ -449,7 +455,7 @@ export default function PurchasePage() {
       for (const p of existing) await updateItem("purchases", p.id, { status: "COMPLETED", ...audit });
       setToast({ msg: `PO ${draftPO.poNumber} completed & locked`, type: "success" });
       setDraftPO(null);
-      await load();
+      await reload();
       setTab("PO List");
     } catch (err) {
       console.error("[PurchasePage] End PO failed:", err);
@@ -463,7 +469,7 @@ export default function PurchasePage() {
       const items = purchases.filter(p => p.poNumber === poNumber);
       for (const p of items) await updateItem("purchases", p.id, { status: "COMPLETED", ...audit });
       setToast({ msg: `PO ${poNumber} locked`, type: "success" });
-      load();
+      reload();
     } catch (err) {
       console.error("[PurchasePage] Lock PO failed:", err);
       setToast({ msg: "Failed to lock PO: " + err.message, type: "error" });
@@ -475,7 +481,7 @@ export default function PurchasePage() {
       const items = purchases.filter(p => p.poNumber === poNumber);
       for (const p of items) await deleteItem("purchases", p.id);
       setToast({ msg: `PO ${poNumber} deleted`, type: "success" });
-      load();
+      reload();
     } catch (err) {
       console.error("[PurchasePage] Delete PO failed:", err);
       setToast({ msg: "Failed to delete PO: " + err.message, type: "error" });

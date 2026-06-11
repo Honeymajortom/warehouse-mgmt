@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { getAllUsers, approveUser, rejectUser, updateUser, updateUserPermissions, deleteUser } from "../services/authService";
+import { getAllUsers, approveUser, rejectUser, updateUser, updateUserPermissions, deleteUser, getDefaultPermissions } from "../services/authService";
 
 function StatusBadge({ status }) {
   const colors = {
@@ -9,7 +9,7 @@ function StatusBadge({ status }) {
   };
   const c = colors[status] || colors.pending;
   return (
-    <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, textTransform: "uppercase", background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
+    <span style={{ padding: "3px 10px", borderRadius: 20, fontSize: 11, fontWeight: 700, textTransform: "uppercase", whiteSpace: "nowrap", background: c.bg, color: c.text, border: `1px solid ${c.border}` }}>
       {status === "approved" && "✓"} {status === "pending" && "⏳"} {status === "rejected" && "✕"} {status}
     </span>
   );
@@ -222,12 +222,22 @@ export default function UserManagementPage({ currentUser }) {
   const handleSaveEdit = async () => {
     if (!modal?.user) return;
     try {
+      const source = modal.user.source;
+      const roleChanged = editForm.role !== modal.user.role;
+
       await updateUser(modal.user.id, {
         name: editForm.name,
         role: editForm.role,
         status: editForm.status,
-      });
-      showToast("User updated successfully.");
+      }, source);
+
+      // Reset permissions to role defaults when the role changes
+      if (roleChanged) {
+        const defaultPerms = getDefaultPermissions(editForm.role);
+        await updateUserPermissions(modal.user.id, defaultPerms, source);
+      }
+
+      showToast(`${editForm.name} updated successfully.${roleChanged ? " Permissions reset to match new role." : ""}`);
       setModal(null);
       loadUsers();
     } catch (err) {
@@ -238,7 +248,7 @@ export default function UserManagementPage({ currentUser }) {
   const handleSavePermissions = async (permissions) => {
     if (!modal?.user) return;
     try {
-      await updateUserPermissions(modal.user.id, permissions);
+      await updateUserPermissions(modal.user.id, permissions, modal.user.source);
       showToast(`Permissions updated for ${modal.user.name}.`);
       setModal(null);
       loadUsers();
@@ -325,7 +335,7 @@ export default function UserManagementPage({ currentUser }) {
                 </td>
                 <td style={{ padding: "14px 16px", color: "var(--text-secondary)" }}>{u.email}</td>
                 <td style={{ padding: "14px 16px" }}><RoleBadge role={u.role} /></td>
-                <td style={{ padding: "14px 16px" }}><StatusBadge status={u.status} /></td>
+                <td style={{ padding: "14px 16px", whiteSpace: "nowrap", width: "1%" }}><StatusBadge status={u.status} /></td>
                 <td style={{ padding: "14px 16px" }}>
                   {u.role === "admin" ? (
                     <span style={{ fontSize: 11, color: "var(--text-muted)" }}>All access</span>

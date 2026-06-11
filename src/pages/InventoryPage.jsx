@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getAll, updateItem, deleteItem } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 
 const RETURN_TYPE_BADGE  = { FD:"red", DM:"red", QI:"amber", RB:"violet", DIS:"cyan" };
@@ -70,21 +71,43 @@ export default function InventoryPage() {
 
   const load = async () => {
     setLoading(true);
-    const [inv, retInv, txn] = await Promise.all([
-      getAll("inventory"), getAll("returninventory"), getAll("transactions"),
-    ]);
-    for (const item of inv) {
-      if (Number(item.availableStock||0) === 0 && item.location) {
-        await updateItem("inventory", item.id, { location:"", pickZone:"" });
-        item.location=""; item.pickZone="";
+    // Inventory needs cleanup before caching — manual cache flow
+    let inv;
+    try {
+      const cached = await cacheManager.get("getall:inventory");
+      if (cached) {
+        inv = cached;
+      } else {
+        inv = await getAll("inventory");
+        for (const item of inv) {
+          if (Number(item.availableStock||0) === 0 && item.location) {
+            await updateItem("inventory", item.id, { location:"", pickZone:"" });
+            item.location=""; item.pickZone="";
+          }
+        }
+        cacheManager.set("getall:inventory", inv, CACHE_TTL.SHORT).catch(() => {});
       }
+    } catch (_) {
+      inv = await getAll("inventory");
     }
+    const [{ data: retInv }, { data: txn }] = await Promise.all([
+      cacheManager.getOrFetch("getall:returninventory", () => getAll("returninventory"), CACHE_TTL.MEDIUM),
+      cacheManager.getOrFetch("getall:transactions",    () => getAll("transactions"),    CACHE_TTL.LONG),
+    ]);
     setInventory(inv.filter(i => Number(i.availableStock||0) > 0));
     setReturnInv(retInv);
     setTransactions(txn.sort((a,b)=>new Date(b.createdAt||b.timestamp)-new Date(a.createdAt||a.timestamp)));
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
+
+  const reload = async () => {
+    await Promise.all([
+      cacheManager.invalidate("getall:inventory"),
+      cacheManager.invalidate("getall:returninventory"),
+    ]).catch(() => {});
+    await load();
+  };
 
   const zones = [...new Set(inventory.map(i=>i.pickZone).filter(Boolean))].sort();
   const cats  = [...new Set(inventory.map(i=>i.category).filter(Boolean))].sort();
@@ -135,7 +158,7 @@ export default function InventoryPage() {
       });
       setToast({ msg:`${editInv.productName} updated`, type:"success" });
       setEditInv(null);
-      load();
+      reload();
     } catch(e) {
       setToast({ msg:"Update failed: "+e.message, type:"error" });
     }
@@ -147,7 +170,7 @@ export default function InventoryPage() {
     try {
       await deleteItem("inventory", r.id);
       setToast({ msg:`${r.productName} removed from inventory`, type:"success" });
-      load();
+      reload();
     } catch(e) {
       setToast({ msg:"Delete failed: "+e.message, type:"error" });
     }
@@ -184,7 +207,7 @@ export default function InventoryPage() {
       });
       setToast({ msg:`${editRet.productName} updated`, type:"success" });
       setEditRet(null);
-      load();
+      reload();
     } catch(e) {
       setToast({ msg:"Update failed: "+e.message, type:"error" });
     }
@@ -196,7 +219,7 @@ export default function InventoryPage() {
     try {
       await deleteItem("returninventory", r.id);
       setToast({ msg:`${r.productName} removed from return inventory`, type:"success" });
-      load();
+      reload();
     } catch(e) {
       setToast({ msg:"Delete failed: "+e.message, type:"error" });
     }

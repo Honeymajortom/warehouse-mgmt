@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { getAll, addItem, updateItem, deleteItem, searchByField, genGrnNumber, genQcId, genGrnReceivingId, genTxnId } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 
 const STATUS_COLOR = { "PO Created":"cyan","GRN Initiated":"violet","QC In Progress":"amber","QC Completed":"teal","Put Away":"green","GRN Receiving":"red" };
@@ -37,7 +38,11 @@ export default function GRNPage() {
 
   const load = async () => {
     setLoading(true);
-    const [grn, purchases, grnr] = await Promise.all([getAll("grn"),getAll("purchases"),getAll("grnreceiving")]);
+    const [{ data: grn }, { data: purchases }, { data: grnr }] = await Promise.all([
+      cacheManager.getOrFetch("getall:grn",         () => getAll("grn"),         CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:purchases",   () => getAll("purchases"),   CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:grnreceiving",() => getAll("grnreceiving"),CACHE_TTL.SHORT),
+    ]);
 
     const processedPoNums = new Set(
       grn
@@ -68,6 +73,15 @@ export default function GRNPage() {
   };
   useEffect(()=>{ load(); },[]);
 
+  const reload = async () => {
+    await Promise.all([
+      cacheManager.invalidate("getall:grn"),
+      cacheManager.invalidate("getall:grnreceiving"),
+      cacheManager.invalidate("getall:putawayqueue"), // QC creates put-away entries
+    ]).catch(() => {});
+    await load();
+  };
+
   // ── GRN List: Edit handlers ───────────────────────────────
   const openEditGrn = (r) => {
     setEditGrn(r);
@@ -94,7 +108,7 @@ export default function GRNPage() {
       });
       setToast({ msg:`GRN ${editGrn.grnNumber} updated`, type:"success" });
       setEditGrn(null);
-      load();
+      reload();
     } catch(e) {
       setToast({ msg:"Update failed: "+e.message, type:"error" });
     }
@@ -110,7 +124,7 @@ export default function GRNPage() {
       const lines = await searchByField("grnlines","grnNumber",r.grnNumber);
       for (const l of lines) await deleteItem("grnlines", l.id);
       setToast({ msg:`GRN ${r.grnNumber} deleted`, type:"success" });
-      load();
+      reload();
     } catch(e) {
       setToast({ msg:"Delete failed: "+e.message, type:"error" });
     }
@@ -140,7 +154,7 @@ export default function GRNPage() {
     setQcRows(invoiceRows.map(r=>({...r,invoiceQty:Number(r.invoiceQty||0),passQty:String(r.invoiceQty||""),failQty:"0"})));
     setToast({msg:`GRN ${grnNumber} created — Start QC`,type:"success"});
     setSaving(false); setInvoiceNo(""); setSelectedPO(null); setInvoiceRows([]);
-    await load(); setTab("QC Process");
+    await reload(); setTab("QC Process");
   };
 
   // ── QC ───────────────────────────────────────────────────
@@ -174,7 +188,7 @@ export default function GRNPage() {
     const grnDocs=await searchByField("grn","grnNumber",activeGrn.grnNumber);
     if (grnDocs[0]) await updateItem("grn",grnDocs[0].id,{status:"QC Completed",qcId,totalPass,totalFail});
     setToast({msg:`QC done — ${totalPass} passed → Put Away · ${totalFail} failed → GRN Receiving`,type:"success"});
-    setSaving(false); setActiveGrn(null); setQcRows([]); await load(); setTab("GRN List");
+    setSaving(false); setActiveGrn(null); setQcRows([]); await reload(); setTab("GRN List");
   };
 
   // ── GRN Receiving ────────────────────────────────────────
@@ -185,7 +199,7 @@ export default function GRNPage() {
     const audit = getAuditFields();
     await updateItem("grnreceiving",item.id,{status:"Done",issueType,reason,closedAt:new Date().toISOString(),...audit});
     setToast({msg:`${item.productName} closed`,type:"success"});
-    load();
+    reload();
   };
 
   const handleResumeQC = async (grn) => {

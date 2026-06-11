@@ -11,8 +11,10 @@ import {
   setDoc,
   getDoc,
   updateDoc,
+  deleteDoc,
   collection,
   getDocs,
+  onSnapshot,
 } from "firebase/firestore";
 import { db } from "./firestoreService";
 import { getApps } from "firebase/app";
@@ -232,8 +234,8 @@ export const updateUser = async (uid, updates, source = USERS_COL) => {
 /**
  * Update permissions directly
  */
-export const updateUserPermissions = async (uid, permissions) => {
-  const ref = doc(db, USERS_COL, uid);
+export const updateUserPermissions = async (uid, permissions, source = USERS_COL) => {
+  const ref = doc(db, source, uid);
   const snap = await getDoc(ref);
   if (!snap.exists()) throw new Error("User not found");
 
@@ -277,7 +279,7 @@ export const deleteUser = async (uid) => {
 // HELPERS
 // ═══════════════════════════════════════════════════════════════
 
-const getDefaultPermissions = (role) => {
+export const getDefaultPermissions = (role) => {
   const defaults = {
     operator: [
       "dashboard:view",
@@ -309,6 +311,22 @@ const getDefaultPermissions = (role) => {
     ],
   };
   return defaults[role] || [];
+};
+
+/**
+ * Real-time listener for a user's profile document.
+ * Fires immediately with current data, then on every change.
+ * Use this so permission/status updates by admin take effect without re-login.
+ */
+export const subscribeToUserProfile = (uid, source, callback) => {
+  const ref = doc(db, source, uid);
+  return onSnapshot(ref, (snap) => {
+    if (snap.exists()) {
+      callback({ id: uid, ...snap.data(), source });
+    }
+  }, (err) => {
+    console.warn("subscribeToUserProfile error:", err.message);
+  });
 };
 
 /**

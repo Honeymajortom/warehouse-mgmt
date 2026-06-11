@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getAll, searchByField, updateItem, addItem } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Badge, Table, Td, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 import Modal from "../components/ui/Modal";
 
@@ -388,7 +389,7 @@ function PickButton({ canPick, noStock, onClick }) {
       onClick={onClick}
       disabled={!canPick}
       style={{
-        padding: "9px 22px", borderRadius: 8, border: "none",
+        padding: "9px 22px", borderRadius: 8,
         background: canPick ? "var(--accent)" : "var(--bg-elevated)",
         color: canPick ? "#fff" : "var(--text-muted)",
         fontWeight: 700, fontSize: 13,
@@ -623,8 +624,10 @@ export default function PickingPage({ goToPack }) {
 
   const load = async () => {
     setLoading(true);
-    const [customers, inventory, picked] = await Promise.all([
-      getAll("customers"), getAll("inventory"), getAll("pickingdata"),
+    const [{ data: customers }, { data: inventory }, { data: picked }] = await Promise.all([
+      cacheManager.getOrFetch("getall:customers",   () => getAll("customers"),   CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:inventory",   () => getAll("inventory"),   CACHE_TTL.SHORT),
+      cacheManager.getOrFetch("getall:pickingdata", () => getAll("pickingdata"), CACHE_TTL.SHORT),
     ]);
 
     const enrich = (c) => {
@@ -668,6 +671,15 @@ export default function PickingPage({ goToPack }) {
 
   useEffect(() => { load(); }, []);
 
+  const reload = async () => {
+    await Promise.all([
+      cacheManager.invalidate("getall:customers"),
+      cacheManager.invalidate("getall:inventory"),
+      cacheManager.invalidate("getall:pickingdata"),
+    ]).catch(() => {});
+    await load();
+  };
+
   // ── Select all / individual ───────────────────────────────
   const allIds       = inTransit.map(o => o.id);
   const allSelected  = allIds.length > 0 && allIds.every(id => selected[id]);
@@ -689,7 +701,7 @@ export default function PickingPage({ goToPack }) {
     setSelected({});
     setToast({ msg: `${ids.length} order(s) moved to Pick Orders`, type: "success" });
     setAssigning(false);
-    load();
+    reload();
   };
 
   // ── Pick action (unchanged) ───────────────────────────────
@@ -718,7 +730,7 @@ export default function PickingPage({ goToPack }) {
     });
     await updateItem("customers", order.id, { status: "Pack", ...audit });
     setToast({ msg: `${order.productName} picked for ${order.name}`, type: "success" });
-    load();
+    reload();
   };
 
   const filteredTransit = inTransit.filter(o =>

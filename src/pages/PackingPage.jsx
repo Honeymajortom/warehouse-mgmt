@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import JsBarcode from "jsbarcode";
 import { getAll, searchByField, updateItem, addItem } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 import { Badge, Button, SectionHeader, Toast } from "../components/ui/index.jsx";
 
 const makeAwb = id =>
@@ -74,11 +75,19 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
 
   const load = async () => {
     setLoading(true);
-    const picked = await getAll("pickingdata");
+    const { data: picked } = await cacheManager.getOrFetch("getall:pickingdata", () => getAll("pickingdata"), CACHE_TTL.SHORT);
     setPackList(picked.filter(p => p.status==="Picked" || p.status==="Packing"));
     setLoading(false);
   };
   useEffect(() => { load(); }, []);
+
+  const reload = async () => {
+    await Promise.all([
+      cacheManager.invalidate("getall:pickingdata"),
+      cacheManager.invalidate("getall:customers"),
+    ]).catch(() => {});
+    await load();
+  };
 
   // Enrich order with full product + customer + vendor details
   const enrichOrder = async (order) => {
@@ -145,7 +154,7 @@ export default function PackingPage({ packOrder, clearPackOrder, goToReturns }) 
     setTimeout(() => {
       goToReturns({...activeOrder, status:"Shipped"});
       setActiveOrder(null); setQcResult(null);
-      setTab("Pack Orders"); load();
+      setTab("Pack Orders"); reload();
     }, 1200);
   };
 

@@ -3,8 +3,9 @@ import {
   onAuth,
   logoutAdmin,
   getUserProfile,
-  loginUser,      // NEW
-  requestAccess,  // NEW
+  subscribeToUserProfile,
+  loginUser,
+  requestAccess,
 } from "./services/authService";
 
 // Pages
@@ -105,6 +106,15 @@ export default function App() {
 
     return () => unsub();
   }, []);
+
+  // Live profile sync — when admin changes permissions/status/role, take effect immediately
+  useEffect(() => {
+    if (!user?.id || !user?.source) return;
+    const unsub = subscribeToUserProfile(user.id, user.source, (updated) => {
+      setUser(updated);
+    });
+    return () => unsub();
+  }, [user?.id, user?.source]);
 
   // Permission helpers
   const hasPermission = useCallback(

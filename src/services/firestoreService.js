@@ -39,74 +39,75 @@ const sanitizeDoc = (d) => {
 };
 
 // ═══════════════════════════════════════════════════════════════
-// SMART PAGINATION — handles partial createdAt migration
+// OPTIMIZED PAGINATION — requires Firestore indexes on createdAt
 // ═══════════════════════════════════════════════════════════════
 
 /**
- * Get paginated documents.
- * If createdAt is missing on some docs, fetches ALL docs to avoid hiding data.
+ * Get paginated documents ordered by createdAt (descending).
+ * 
+ * REQUIRES:
+ * - All documents to have a `createdAt` field
+ * - Firestore composite index: collection(createdAt DESC)
+ * - Run migrateAllCollections() if you have legacy docs without createdAt
+ * 
+ * @param {string} col Collection name
+ * @param {number} pageSize Documents per page (default 50)
+ * @param {DocumentSnapshot} lastDoc Last doc from previous page (for cursor-based pagination)
+ * @returns {Promise<{docs, lastDoc, hasMore}>}
  */
 export const getPaginated = async (col, pageSize = 50, lastDoc = null) => {
-  // If we're paginating (lastDoc exists), try createdAt ordering
-  if (lastDoc) {
-    try {
-      const q = query(
-        collection(db, col),
-        orderBy("createdAt", "desc"),
-        startAfter(lastDoc),
-        limit(pageSize)
-      );
-      const snap = await getDocs(q);
-      return {
-        docs: snap.docs.map(sanitizeDoc),
-        lastDoc: snap.docs[snap.docs.length - 1] || null,
-        hasMore: snap.docs.length === pageSize,
-      };
-    } catch (e) {
-      console.warn(`getPaginated(${col}) pagination failed:`, e.message);
-      return { docs: [], lastDoc: null, hasMore: false };
-    }
-  }
-
-  // First page: check if collection has createdAt uniformly
   try {
-    // Try ordering by createdAt
-    const q = query(collection(db, col), orderBy("createdAt", "desc"), limit(pageSize));
+    const constraints = [orderBy("createdAt", "desc"), limit(pageSize)];
+    if (lastDoc) constraints.push(startAfter(lastDoc));
+
+    const q = query(collection(db, col), ...constraints);
     const snap = await getDocs(q);
-    const docs = snap.docs.map(sanitizeDoc);
 
-    // If we got results, check if this is the FULL collection
-    // by comparing with total count
-    const totalSnap = await getCountFromServer(collection(db, col));
-    const totalCount = totalSnap.data().count;
-
-    if (docs.length === totalCount) {
-      // All docs have createdAt — return as-is
-      return { docs, lastDoc: null, hasMore: false };
+    // Ordered query returns 0 on first page: documents may lack createdAt.
+    // Fall back to unordered so legacy docs are still visible.
+    if (snap.docs.length === 0 && !lastDoc) {
+      const fallbackSnap = await getDocs(query(collection(db, col), limit(pageSize)));
+      if (fallbackSnap.docs.length > 0) {
+        console.warn(
+          `[getPaginated] ${col}: ordered query returned 0 but ${fallbackSnap.docs.length} docs exist. ` +
+          `Run migrateAllCollections() in the browser console to fix permanently.`
+        );
+        return {
+          docs: fallbackSnap.docs.map(sanitizeDoc),
+          lastDoc: null,
+          hasMore: false,
+        };
+      }
     }
 
-    // Partial migration: some docs have createdAt, some don't
-    // Fetch ALL docs to avoid hiding unmigrated data
-    console.warn(
-      `getPaginated(${col}) partial migration detected: ` +
-      `${docs.length} docs have createdAt out of ${totalCount} total. ` +
-      `Fetching ALL docs to avoid hiding data.`
-    );
-    throw new Error("Partial migration — fetch all");
+    return {
+      docs: snap.docs.map(sanitizeDoc),
+      lastDoc: snap.docs[snap.docs.length - 1] || null,
+      hasMore: snap.docs.length === pageSize,
+    };
+  } catch (error) {
+    console.error(`getPaginated(${col}) error:`, error.message);
 
-  } catch (e) {
-    // Fallback: fetch ALL documents
-    try {
-      const snap = await getDocs(collection(db, col));
-      return {
-        docs: snap.docs.map(sanitizeDoc),
-        lastDoc: null,
-        hasMore: false,
-      };
-    } catch (fallbackErr) {
-      console.error(`getPaginated(${col}) complete failure:`, fallbackErr);
-      return { docs: [], lastDoc: null, hasMore: false };
+    if (error.message.includes("FAILED_PRECONDITION")) {
+      console.warn(
+        `⚠ ${col}: Firestore index missing or migration incomplete.\n` +
+        `Run: migrateAllCollections() in the browser console.\n` +
+        `Then: firebase deploy --only firestore:indexes`
+      );
+      // Fall back to unordered fetch
+      try {
+        const fallbackSnap = await getDocs(query(collection(db, col), limit(pageSize)));
+        return {
+          docs: fallbackSnap.docs.map(sanitizeDoc),
+          lastDoc: null,
+          hasMore: false,
+        };
+      } catch (fallbackErr) {
+        console.error(`getPaginated fallback(${col}) error:`, fallbackErr.message);
+      }
     }
+
+    return { docs: [], lastDoc: null, hasMore: false };
   }
 };
 
@@ -250,6 +251,121 @@ export const genGrnReceivingId = () => {
   const d = new Date();
   const date = `${d.getFullYear()}${String(d.getMonth()+1).padStart(2,"0")}${String(d.getDate()).padStart(2,"0")}`;
   return `GRNR-${date}-${Math.floor(1000+Math.random()*9000)}`;
+};
+
+// ═══════════════════════════════════════════════════════════════
+// OPTIMIZED AGGREGATIONS — fetch only stats, not full documents
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Get dashboard stats without loading full documents.
+ * Fetches only essential data for KPIs (counts, sums, filters).
+ * Much faster than getAll() on large collections.
+ */
+export const getDashboardStats = async () => {
+  try {
+    // Fetch minimal data for each collection
+    const [customers, products, purchases, inventory, grn, returns] = await Promise.all([
+      // Customers: just count
+      getCount("customers"),
+      // Products: just count
+      getCount("products"),
+      // Purchases: fetch to sum totalCost
+      getDocs(collection(db, "purchases")).then(snap => 
+        snap.docs.map(d => ({ totalCost: d.data().totalCost || 0 }))
+      ),
+      // Inventory: fetch to calculate totals and low stock
+      getDocs(collection(db, "inventory")).then(snap =>
+        snap.docs.map(d => ({
+          stockAmount: d.data().stockAmount || 0,
+          availableStock: d.data().availableStock || 0
+        }))
+      ),
+      // GRN: fetch to count pending
+      getDocs(collection(db, "grn")).then(snap =>
+        snap.docs.map(d => ({ putAwayStatus: d.data().putAwayStatus }))
+      ),
+      // Returns: just count
+      getCount("returns")
+    ]);
+
+    // Calculate aggregates
+    const totalCost = purchases.reduce((s, r) => s + Number(r.totalCost || 0), 0);
+    const totalStock = inventory.reduce((s, r) => s + Number(r.stockAmount || 0), 0);
+    const lowStock = inventory.filter(i => Number(i.availableStock || 0) < 20).length;
+    const pendingGrn = grn.filter(g => g.putAwayStatus !== "Done").length;
+
+    return {
+      customerCount: customers,
+      productCount: products,
+      totalCost,
+      totalStock,
+      lowStock,
+      pendingGrn,
+      returnCount: returns
+    };
+  } catch (error) {
+    console.error("getDashboardStats() error:", error);
+    return {
+      customerCount: 0,
+      productCount: 0,
+      totalCost: 0,
+      totalStock: 0,
+      lowStock: 0,
+      pendingGrn: 0,
+      returnCount: 0
+    };
+  }
+};
+
+/**
+ * Alternative: More aggressive optimization using only counts.
+ * For very large collections, fetch only counts (fastest).
+ * Trade-off: can't compute low stock count without fetching inventory.
+ */
+export const getDashboardStatsFast = async () => {
+  try {
+    const [
+      customerCount,
+      productCount,
+      returnCount
+    ] = await Promise.all([
+      getCount("customers"),
+      getCount("products"),
+      getCount("returns")
+    ]);
+
+    // These still need fetches for calculations
+    const purchases = await getDocs(collection(db, "purchases"));
+    const inventory = await getDocs(collection(db, "inventory"));
+    const grnDocs = await getDocs(collection(db, "grn"));
+
+    const totalCost = purchases.docs.reduce((s, d) => s + Number(d.data().totalCost || 0), 0);
+    const totalStock = inventory.docs.reduce((s, d) => s + Number(d.data().stockAmount || 0), 0);
+    const lowStock = inventory.docs.filter(d => Number(d.data().availableStock || 0) < 20).length;
+    const pendingGrn = grnDocs.docs.filter(d => d.data().putAwayStatus !== "Done").length;
+
+    return {
+      customerCount,
+      productCount,
+      totalCost,
+      totalStock,
+      lowStock,
+      pendingGrn,
+      returnCount
+    };
+  } catch (error) {
+    console.error("getDashboardStatsFast() error:", error);
+    return {
+      customerCount: 0,
+      productCount: 0,
+      totalCost: 0,
+      totalStock: 0,
+      lowStock: 0,
+      pendingGrn: 0,
+      returnCount: 0
+    };
+  }
 };
 
 export const exportCSV = (filename, rows) => {

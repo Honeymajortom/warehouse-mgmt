@@ -1,6 +1,7 @@
   import { useState, useEffect } from "react";
   import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, AreaChart, Area } from "recharts";
-  import { getAll } from "../services/firestoreService";
+  import { getDashboardStats, getRecent } from "../services/firestoreService";
+  import { cacheManager, cacheKeys, CACHE_TTL } from "../services/cacheManager";
   import {
   People,
   Inventory2,
@@ -21,58 +22,99 @@
   };
 
   export default function DashboardPage() {
-    const [d,setD]     = useState({ customers:[],products:[],purchases:[],inventory:[],grn:[],returns:[] });
+    const [stats,setStats] = useState(null);
+    const [chartData,setChartData] = useState({ purchases:[], inventory:[], returns:0 });
     const [loading,setL] = useState(true);
+    const [cacheStatus, setCacheStatus] = useState(null);
 
     useEffect(()=>{
-      Promise.all([getAll("customers"),getAll("products"),getAll("purchases"),getAll("inventory"),getAll("grn"),getAll("returns")])
-        .then(([customers,products,purchases,inventory,grn,returns])=>{ setD({customers,products,purchases,inventory,grn,returns}); setL(false); });
+      const loadDashboard = async () => {
+        try {
+          // Load stats from cache or fetch fresh
+          const statsResult = await cacheManager.getOrFetch(
+            cacheKeys.dashboardStats(),
+            () => getDashboardStats(),
+            CACHE_TTL.LONG  // 15 min cache
+          );
+
+          // Load chart data from cache or fetch fresh
+          const chartsResult = await cacheManager.getOrFetch(
+            cacheKeys.dashboardCharts(),
+            () => Promise.all([
+              getRecent("purchases", 50),
+              getRecent("inventory", 50)
+            ]),
+            CACHE_TTL.MEDIUM  // 5 min cache
+          );
+
+          setStats(statsResult.data);
+          const [recentPurchases, recentInventory] = chartsResult.data;
+          setChartData({ 
+            purchases: recentPurchases, 
+            inventory: recentInventory, 
+            returns: statsResult.data.returnCount 
+          });
+          
+          // Show cache status
+          setCacheStatus({
+            stats: statsResult.source,
+            charts: chartsResult.source
+          });
+          
+          setL(false); 
+        } catch (error) {
+          console.error("Dashboard load error:", error);
+          setL(false);
+        }
+      };
+
+      loadDashboard();
     },[]);
 
-    const totalCost  = d.purchases.reduce((s,r)=>s+Number(r.totalCost||0),0);
-    const totalStock = d.inventory.reduce((s,r)=>s+Number(r.stockAmount||0),0);
-    const lowStock   = d.inventory.filter(i=>Number(i.availableStock||0)<20).length;
-    const pendingGrn = d.grn.filter(g=>g.putAwayStatus!=="Done").length;
+    const totalCost = stats?.totalCost || 0;
+    const totalStock = stats?.totalStock || 0;
+    const lowStock = stats?.lowStock || 0;
+    const pendingGrn = stats?.pendingGrn || 0;
 
   const kpis = [
     {
       label:"Customers",
-      value:d.customers.length,
+      value:stats?.customerCount || 0,
       iconBg:"var(--badge-cyan-bg)",
       iconColor:"var(--badge-cyan-fg)",
       icon: People
     },
     {
       label:"Products",
-      value:d.products.length,
+      value:stats?.productCount || 0,
       iconBg:"var(--badge-tel-bg)",
       iconColor:"var(--badge-tel-fg)",
       icon: Inventory2
     },
     {
       label:"Purchase Amt",
-      value:`₹${totalCost.toLocaleString()}`,
+      value:`₹${(totalCost || 0).toLocaleString()}`,
       iconBg:"var(--badge-vio-bg)",
       iconColor:"var(--badge-vio-fg)",
       icon: CurrencyRupee
     },
     {
       label:"Stock Value",
-      value:`₹${totalStock.toLocaleString()}`,
+      value:`₹${(totalStock || 0).toLocaleString()}`,
       iconBg:"var(--badge-amb-bg)",
       iconColor:"var(--badge-amb-fg)",
       icon: Warehouse
     },
     {
       label:"Low Stock",
-      value:lowStock,
-      iconBg:lowStock>0?"var(--badge-red-bg)":"var(--badge-grn-bg)",
-      iconColor:lowStock>0?"var(--badge-red-fg)":"var(--badge-grn-fg)",
+      value:lowStock || 0,
+      iconBg:(lowStock || 0)>0?"var(--badge-red-bg)":"var(--badge-grn-bg)",
+      iconColor:(lowStock || 0)>0?"var(--badge-red-fg)":"var(--badge-grn-fg)",
       icon: Warning
     },
     {
       label:"Pending GRN",
-      value:pendingGrn,
+      value:pendingGrn || 0,
       iconBg:"var(--badge-cyan-bg)",
       iconColor:"var(--badge-cyan-fg)",
       icon: FactCheck
@@ -80,14 +122,15 @@
   ];
 
     const productUnits={};
-    d.purchases.forEach(p=>{productUnits[p.productName]=(productUnits[p.productName]||0)+Number(p.units||0);});
+    chartData.purchases.forEach(p=>{productUnits[p.productName]=(productUnits[p.productName]||0)+Number(p.units||0);});
     const topProducts=Object.entries(productUnits).sort((a,b)=>b[1]-a[1]).slice(0,5).map(([name,units])=>({name:name.length>8?name.slice(0,8)+"…":name,units}));
-    const stockData=d.inventory.slice(0,6).map(i=>({name:(i.productName||"").length>8?(i.productName||"").slice(0,8)+"…":(i.productName||""),stock:Number(i.availableStock||0)}));
+    const stockData=chartData.inventory.slice(0,6).map(i=>({name:(i.productName||"").length>8?(i.productName||"").slice(0,8)+"…":(i.productName||""),stock:Number(i.availableStock||0)}));
     const notifications=[
       {msg:"Firebase connected ✓",                      colorClass:"t-success"},
-      {msg:`${lowStock} product(s) low on stock`,        colorClass:lowStock>0?"t-danger":"t-success"},
-      {msg:`${pendingGrn} GRN entries pending put-away`, colorClass:pendingGrn>0?"t-warning":"t-success"},
-      {msg:`${d.returns.length} return(s) logged`,       colorClass:"t-accent"},
+      {msg:`${lowStock || 0} product(s) low on stock`,        colorClass:(lowStock || 0)>0?"t-danger":"t-success"},
+      {msg:`${pendingGrn || 0} GRN entries pending put-away`, colorClass:(pendingGrn || 0)>0?"t-warning":"t-success"},
+      {msg:`${chartData.returns} return(s) logged`,       colorClass:"t-accent"},
+      ...(cacheStatus ? [{msg:`✓ Loaded from cache`, colorClass:"t-success"}] : []),
     ];
 
     if(loading) return(

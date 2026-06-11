@@ -4,7 +4,7 @@ import { getAll, genOrderId } from "../services/firestoreService";
 import { getAuditFields } from "../services/authService";
 import { Badge, Table, Td, Input, Select, Button, FormCard, SectionHeader, Toast } from "../components/ui/index.jsx";
 import Modal from "../components/ui/Modal";
-import ExcelJS from "exceljs";
+import { cacheManager, CACHE_TTL } from "../services/cacheManager";
 
 const STATUS_OPTIONS = ["In Transit", "Pick", "Pack", "Shipped"];
 
@@ -120,6 +120,7 @@ function validateRow(row, invProducts) {
 
 // ── Parse uploaded .xlsx with ExcelJS ────────────────────────────────────
 async function parseExcelWithExcelJS(file) {
+  const ExcelJS = (await import("exceljs")).default;
   const buffer = await file.arrayBuffer();
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
@@ -212,7 +213,10 @@ export default function CustomersPage() {
   const fileInputRef = useRef();
 
   const loadInventory = () =>
-    Promise.all([getAll("inventory"), getAll("customers")]).then(([inv, custs]) => {
+    Promise.all([
+      cacheManager.getOrFetch("getall:inventory", () => getAll("inventory"), CACHE_TTL.SHORT).then(r => r.data),
+      cacheManager.getOrFetch("getall:customers",  () => getAll("customers"),  CACHE_TTL.SHORT).then(r => r.data),
+    ]).then(([inv, custs]) => {
       const committed = {};
       custs
         .filter(c => c.status === "In Transit" || c.status === "Pick")
@@ -224,7 +228,7 @@ export default function CustomersPage() {
       setInvProducts(inStock);
     });
 
-  useEffect(() => { loadInventory(); }, [tab]);
+  useEffect(() => { loadInventory(); }, []);
 
   useEffect(() => {
     if (!importRows.length) return;

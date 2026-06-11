@@ -12,5 +12,70 @@
         "destination": "/index.html"
       }
     ]
+  },
+  "firestore": {
+    "indexes": [
+      {
+        "collection": "customers",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "createdAt",
+            "order": "DESCENDING"
+          }
+        ]
+      },
+      {
+        "collection": "products",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "createdAt",
+            "order": "DESCENDING"
+          }
+        ]
+      },
+      {
+        "collection": "purchases",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "createdAt",
+            "order": "DESCENDING"
+          }
+        ]
+      },
+      {
+        "collection": "inventory",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "createdAt",
+            "order": "DESCENDING"
+          }
+        ]
+      },
+      {
+        "collection": "grn",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "createdAt",
+            "order": "DESCENDING"
+          }
+        ]
+      },
+      {
+        "collection": "returns",
+        "queryScope": "COLLECTION",
+        "fields": [
+          {
+            "fieldPath": "createdAt",
+            "order": "DESCENDING"
+          }
+        ]
+      }
+    ]
   }
 }
+
